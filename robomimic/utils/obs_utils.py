@@ -255,7 +255,7 @@ def clip_depth_alone_gripper_x_batch(goal_key, rgbd_images, gripper_pose, camera
     # rgbd_images[..., 3] = np.clip(rgbd_images[...,3], -x_range_half, x_range_half)
     return rgbd_images
 
-def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, camera_info=None, bbox_size = (40, 40), centering_method='crop'):
+def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, camera_info=None, bbox_size = (40, 40), centering_method='crop', silence=False):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -294,7 +294,7 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
     # convert eef pos in world coor to pixel locations in image coor
     bbox_centers = xyz_to_bbox_center_batch(robot0_eef_pos, intrinsic, extrinsic)
     bbox_center_in_image = np.clip(bbox_centers, 0, np.array([h,w]))
-    if not (bbox_center_in_image == bbox_centers).all():
+    if not (bbox_center_in_image == bbox_centers).all() and not silence:
         print("WARNING: End-effector center is not in observation. Trying clipping.")
 
     # extracting gripper centric images
