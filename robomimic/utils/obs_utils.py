@@ -56,6 +56,9 @@ DEPTH_MINMAX = {'birdview_depth': [1.180, 2.480],
                 'spaceview_depth': [0.45, 1.45],
                 'farspaceview_depth': [0.58, 1.58],
                 }
+WORKSPACE_MAX = {
+                'spaceview': 1.40,
+                }
 
 def discretize_depth(depth, cam_name, depth_minmax=None):
     # input a true depth and discretize to [0,255]
@@ -223,18 +226,21 @@ def clip_depth_alone_gripper_x_batch(goal_key, rgbd_images, gripper_pose, camera
     pcd_rt_world = np.einsum('ij,jkl->ikl', camera_extrinsic, pcd_rt_cam.T).T
     pcd_rt_world = pcd_rt_world[...,:3] / pcd_rt_world[...,-1:]
 
-    pcd_mask_far = pcd_rt_world[..., 0] > (gripper_pose[..., 0:1] - x_range_half)
-    pcd_mask_close = pcd_rt_world[..., 0] < (gripper_pose[..., 0:1] + x_range_half)
-    # pcd_mask = pcd_mask_far * pcd_mask_close
-    pcd_mask = pcd_mask_far
+    clip_near_gripper=False
+    if clip_near_gripper:
+        pcd_mask_far = pcd_rt_world[..., 0] > (gripper_pose[..., 0:1] - x_range_half)
+        pcd_mask_close = pcd_rt_world[..., 0] < (gripper_pose[..., 0:1] + x_range_half)
+        # pcd_mask = pcd_mask_far * pcd_mask_close
+        pcd_mask = pcd_mask_far
+    else:
+        pcd_mask = pcd_rt_world[..., 0] < WORKSPACE_MAX[goal_key.split('_')[0]]
 
-    pcd_mask, pcd_mask_close, pcd_mask_far = pcd_mask.reshape(batch_size, height, width), pcd_mask_close.reshape(batch_size, height, width), pcd_mask_far.reshape(batch_size, height, width)
+    pcd_mask = pcd_mask.reshape(batch_size, height, width)
     rgbd_images[~pcd_mask,:3] = np.array([0.,255.,0.])
 
-    camera_tilt_angle = Rotation.from_matrix(camera_extrinsic[:3,:3]).as_euler('ZYX')[2] + np.pi / 2
-    
-
     if depth_normalization_around_gripper:
+        pcd_mask_close, pcd_mask_far = pcd_mask_close.reshape(batch_size, height, width), pcd_mask_far.reshape(batch_size, height, width)
+        camera_tilt_angle = Rotation.from_matrix(camera_extrinsic[:3,:3]).as_euler('ZYX')[2] + np.pi / 2
         # center depth at 
         camera_clip_range = x_range_half / np.cos(camera_tilt_angle)
         rgbd_images[~pcd_mask_close, 3] = -camera_clip_range
@@ -244,7 +250,7 @@ def clip_depth_alone_gripper_x_batch(goal_key, rgbd_images, gripper_pose, camera
         depth_min, depth_max = -camera_clip_range, camera_clip_range
         rgbd_images[...,3] = (rgbd_images[...,3] - depth_min) / (depth_max - depth_min) * 255
     else:
-        rgbd_images[~pcd_mask_far, 3] = DEPTH_MINMAX[goal_key.split('_')[0]+'_depth'][1]
+        rgbd_images[~pcd_mask, 3] = DEPTH_MINMAX[goal_key.split('_')[0]+'_depth'][1]
         rgbd_images[...,3] = discretize_depth(rgbd_images[...,3], goal_key.split('_')[0]+'_depth')
 
     
@@ -285,6 +291,7 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
     depth_normalization_around_gripper = False
     raw_image = images.copy().astype(float)
 
+    
     # clip the pixels that are behind the gripper
     if 'rgbd' in goal_key:
         raw_image[...,3] = undiscretize_depth(raw_image[...,3], goal_key.split('_')[0]+'_depth')
