@@ -118,7 +118,11 @@ def crop_and_pad_batch(images, bb_centers, output_size):
     Returns:
     - Tensor of shape (batch_size, channels, out_height, out_width)
     """
-    batch_size, channels, height, width = images.shape
+    batch_size, height, width, channels = images.shape
+    if channels == 4:
+        pad_with = (((0, 255, 0, 255), (0, 255, 0, 255)), ((0, 255, 0, 255), (0, 255, 0, 255)), ((0, 0))) # pad with green and 255 depth
+    else:
+        pad_with = (((0, 255, 0), (0, 255, 0)), ((0, 255, 0), (0, 255, 0)), ((0, 0))) # pad with green and 255 depth
     out_height, out_width = output_size
     image_pad_height = out_height // 2
     image_pad_width = out_width // 2
@@ -131,7 +135,6 @@ def crop_and_pad_batch(images, bb_centers, output_size):
     cropped_images = []
     
     for img, top_left, bottom_right in zip(images, top_lefts, bottom_rights):
-        pad_with = (((0, 255, 0, 255), (0, 255, 0, 255)), ((0, 255, 0, 255), (0, 255, 0, 255)), ((0, 0))) # pad with green and 255 depth
         # pad_with = ((0, 255), (0, 255), (0, 255))
         padded_img = np.pad(img, ((image_pad_height,image_pad_height),(image_pad_width,image_pad_width),(0,0)), mode='constant',constant_values=np.array(pad_with, dtype=object))
 
