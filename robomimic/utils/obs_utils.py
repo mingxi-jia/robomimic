@@ -6,6 +6,7 @@ import numpy as np
 from copy import deepcopy
 from collections import OrderedDict
 from scipy.spatial.transform import Rotation
+import re
 
 import torch
 import torch.nn.functional as F
@@ -60,12 +61,75 @@ WORKSPACE_MAX = {
                 'spaceview': 1.40,
                 }
 
-def discretize_depth(depth, cam_name, depth_minmax=None):
+
+def clip_depth(raw_depth, depth_key):
+    depth_min, depth_max = DEPTH_MINMAX[depth_key]
+    if isinstance(raw_depth, torch.Tensor):
+        raw_depth = torch.clip(raw_depth, depth_min, depth_max)
+    elif isinstance(raw_depth, np.ndarray):
+        raw_depth = np.clip(raw_depth, depth_min, depth_max)
+    else:
+        NotImplementedError
+    return raw_depth
+
+def convert_rgbd_to_pcd_batch(rgbd_images, camera_intrinsic, camera_extrinsic, gripper_centric):
+    """
+    Convert a batch of RGBD images to point cloud data (PCD).
+
+    Parameters:
+    - rgbd_images: array of shape (batch_size, height, width, 4), where the last dimension is [R, G, B, D]
+    - camera_intrinsic: 3x3 list representing camera intrinsic matrix
+    - camera_extrinsic: 4x4 list representing camera extrinsic matrix
+    - gripper_centric: boolean, if True, convert to gripper-centric coordinates
+
+    Returns:
+    - pcd: array of shape (batch_size, height * width, 6), point cloud data
+    """
+    batch_size, _, height, width = rgbd_images.shape
+    rgb_images = rgbd_images[:, :3]
+    depth_images = rgbd_images[:, 3]
+
+    # Create meshgrid for pixel coordinates
+    x, y = np.meshgrid(np.arange(width), np.arange(height))
+    x = x.reshape(-1)
+    y = y.reshape(-1)
+
+    # Convert depth to point cloud
+    fx, fy = camera_intrinsic[0][0], camera_intrinsic[1][1]
+    cx, cy = camera_intrinsic[0][2], camera_intrinsic[1][2]
+
+    pcd = np.zeros((batch_size, height * width, 6))
+    for i in range(batch_size):
+        depth = depth_images[i].reshape(-1)
+        pcd[i, :, 0] = (x - cx) * depth / fx
+        pcd[i, :, 1] = (y - cy) * depth / fy
+        pcd[i, :, 2] = depth_images[i].reshape(-1)
+        pcd[i, :, 3:] = rgb_images[i].reshape(-1)
+
+    # Apply extrinsic transformation
+    if gripper_centric:
+        pcd_homogeneous = np.concatenate([pcd, np.ones((batch_size, height * width, 1))], axis=-1)
+        pcd_transformed = np.einsum('ij,bkj->bki', camera_extrinsic, pcd_homogeneous)
+        pcd = pcd_transformed[..., :3] / pcd_transformed[..., 3:]
+
+    return pcd
+
+def match_multi_camera_name(pattern: str) -> bool:
+    # assuming that all multicam depths are given names like "camera{NUM}_depth"
+    # Regular expression to match the pattern "camera{some int number}_depth"
+    regex = r'^camera\d+_depth$'
+    return bool(re.match(regex, pattern))
+
+def discretize_depth(depth: np.array, cam_name: str, depth_minmax=None):
     # input a true depth and discretize to [0,255]
     # depths.shape = (N, H, W, C)
     if depth_minmax == None:
-        assert cam_name in DEPTH_MINMAX.keys(), "you need add depth_minmax in obs_utils.py"
-        depth_minmax = DEPTH_MINMAX[cam_name]
+        if cam_name in DEPTH_MINMAX.keys():
+            depth_minmax = DEPTH_MINMAX[cam_name]
+        elif match_multi_camera_name(cam_name): 
+            depth_minmax = [depth.min(), depth.max()]
+        else:
+            assert True, "you need add depth_minmax in obs_utils.py"
     minmax_range = depth_minmax[1] - depth_minmax[0]
     ndepths =(np.clip(depth, depth_minmax[0], depth_minmax[1]) - depth_minmax[0]) / minmax_range * 255
     return ndepths.astype(np.uint8)
@@ -317,6 +381,77 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
 
     gripper_centered_current_obs = F.interpolate(torch.from_numpy(gripper_centered_current_obs.astype(np.uint8)).permute(0, 3, 1, 2), (h, w), mode='bilinear').permute(0, 2, 3, 1).numpy()
     return gripper_centered_current_obs, bbox_center_in_image
+
+def populate_point_num(pcd, point_num):
+    if pcd.shape[0] < point_num:
+        pcd = np.concatenate([pcd, pcd[np.random.choice(pcd.shape[0], point_num-pcd.shape[0])]], axis=0)
+    else:
+        shuffle_idx = np.random.permutation(pcd.shape[0])[:point_num]
+        pcd = pcd[shuffle_idx]
+    return pcd
+
+def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw):
+    """
+    Transform a set of points from the world coordinate system to the 'e' coordinate system.
+    
+    Args:
+        points_world (numpy.ndarray): An (N, 3) array of points in the world coordinate system.
+        T_W_e (numpy.ndarray): A (7,) transformation matrix that transforms points 
+                               from frame e to the world frame (i.e., {}^W T_e).
+    
+    Returns:
+        numpy.ndarray: An (N, 3) array of points expressed in the 'e' coordinate system.
+    """
+    # Construct T_W_e mat
+    T_W_e = np.eye(4)
+    T_W_e[:3,:3] = Rotation.from_quat(T_W_e_xyzqxyzw[3:]).as_matrix()
+    T_W_e[:3, 3] = T_W_e_xyzqxyzw[:3]
+    # Assuming ee_pose contains the position of the end-effector
+    T_e_W = np.linalg.inv(T_W_e)
+    # Convert points from world coordinates to homogeneous coordinates
+    num_points = points_world.shape[0]
+    points_homogeneous = np.hstack([points_world, np.ones((num_points, 1))])
+
+    # Apply the inverse transformation
+    transformed_homogeneous = (T_e_W @ points_homogeneous.T).T
+
+    # Convert back to Cartesian coordinates (drop the homogeneous coordinate)
+    points_e = transformed_homogeneous[:, :3]
+    return points_e
+
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poss, abs_action, gripper_centric=False, bbox_size_m = 0.2):
+    """
+    Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
+    
+    Parameters:
+    - sim: robosuite env class, for getting camera intrinsic and extrinsic
+    - pcd: array of float point cloud in shape (batch_size, height, width, channels), row is y and column is x
+    - goal_key: image key, e.g., frontview_gripper_image or frontview_gripper_rgbd
+    - robot0_eef_poss: array of 3d positions of shape (batch_size, 3) in world frame
+    
+    Returns:
+    - array of images of shape (batch_size, height, width, channels), np.uint8
+    """
+    assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
+    fix_point_num = 512 if gripper_centric else 1024
+
+    # toss out the points that are away from the gripper
+    bbox_size_x, bbox_size_y, bbox_size_z = bbox_size_m, bbox_size_m, bbox_size_m
+    processed_pcds = []
+    for pcd, previous_eef_pos in zip(pcds, previous_eef_poss):
+        if gripper_centric:
+            gripper_pos = previous_eef_pos
+            mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_x / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_x / 2))
+            mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_y / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_y / 2))
+            mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_z / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_z / 2))
+            mask = mask_x & mask_y & mask_z
+            p = populate_point_num(pcd[mask], fix_point_num) if mask.sum()>0 else pcd[:fix_point_num]
+            p[...,:3] = NotImplementedError if abs_action else transform_pcd_to_ee_frame(p[...,:3], previous_eef_pos)
+        else:
+            p = populate_point_num(pcd, fix_point_num)
+        processed_pcds.append(p)
+
+    return np.stack(processed_pcds)
 
 def register_obs_key(target_class):
     assert target_class not in OBS_MODALITY_CLASSES, f"Already registered modality {target_class}!"

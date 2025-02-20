@@ -71,3 +71,6 @@ def extract_class_init_kwargs_from_dict(cls, dic, copy=False, verbose=False):
             print(f"Warning: For class {cls.__name__}, got missing keys: {keys_not_in_dic} ")
 
     return subdic
+
+def numpy_array_to_string(array):
+    return " ".join(str(x) for x in array)

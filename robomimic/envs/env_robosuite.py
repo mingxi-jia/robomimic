@@ -31,7 +31,8 @@ except ImportError:
     MUJOCO_EXCEPTIONS = []
 
 from robomimic.utils.obs_utils import (DEPTH_MINMAX, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
-                                       crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch)
+                                       crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
+                                       convert_rgbd_to_pcd_batch)
 
 
 
@@ -63,6 +64,14 @@ def np2o3d(pcd, color=None):
         assert color.min() >= 0
         pcd_o3d.colors = o3d.utility.Vector3dVector(color)
     return pcd_o3d
+
+def o3d2np(pcd_o3d):
+    # pcd: (n, 3)
+    # color: (n, 3)
+    xyz = np.asarray(pcd_o3d.points)
+    rgb = np.asarray(pcd_o3d.colors)
+    pcd_np = np.concatenate([xyz, rgb], axis=1)
+    return pcd_np
 
 
 class EnvRobosuite(EB.EnvBase):
@@ -259,22 +268,21 @@ class EnvRobosuite(EB.EnvBase):
             if (k in ObsUtils.OBS_KEYS_TO_MODALITIES) and ObsUtils.key_is_obs_modality(key=k, obs_modality="depth"):
                 ret[k] = di[k][::-1]
                 ret[k] = get_real_depth_map(self.env.sim, ret[k])
-                ret[k] = discretize_depth(ret[k], k)
                 if self.postprocess_visual_obs:
                     ret[k] = ObsUtils.process_obs(obs=ret[k], obs_key=k)
-                    # ret[k] = undiscretize_depth(ret[k], k)
+                    # ret[k] = clip_depth(ret[k])
 
         
         
         # "object" key contains object information
         ret["object"] = np.array(di["object-state"])
         axis = 0 if self.postprocess_visual_obs else 2
-
+        # print(ret.keys())
         
-        if self.env.use_camera_obs:
-            # add rgbd into obs
-            for cam in self.env.camera_names:
-                ret[f"{cam}_rgbd"] = np.concatenate([ret[f"{cam}_image"], ret[f"{cam}_depth"]], axis=axis)
+        # if self.env.use_camera_obs:
+        #     # add rgbd into obs
+        #     for cam in self.env.camera_names:
+        #         ret[f"{cam}_rgbd"] = np.concatenate([ret[f"{cam}_image"], ret[f"{cam}_depth"]], axis=axis)
             
             # # add gripper obs into obs
             # for goal_key in [f"{self.main_camera}_gripper_rgbd"]:
@@ -327,7 +335,8 @@ class EnvRobosuite(EB.EnvBase):
                 # pose = np.linalg.inv(ext_mat)
                 pose = ext_mat
                 
-                trans_pcd = pose @ np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0)
+                # trans_pcd = pose @ np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0)
+                trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
 
                 mask = (trans_pcd[:, 0] > workspace[0, 0]) * (trans_pcd[:, 0] < workspace[0, 1]) * (trans_pcd[:, 1] > workspace[1, 0]) * (trans_pcd[:, 1] < workspace[1, 1]) * (trans_pcd[:, 2] > workspace[2, 0]) * (trans_pcd[:, 2] < workspace[2, 1])
@@ -377,8 +386,9 @@ class EnvRobosuite(EB.EnvBase):
             # plt.savefig('test2.png')
             # plt.close()
 
-            ret['voxels'] = np_voxels
-            # ret['pcd'] = all_pcds
+            # ret['voxels'] = np_voxels
+            # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
+            ret['pcd'] = o3d2np(all_pcds.farthest_point_down_sample(num_samples=4412)) 
 
         if self._is_v1:
             for robot in self.env.robots:

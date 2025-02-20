@@ -68,6 +68,7 @@ if __name__ == "__main__":
     if "total" in f["data"].attrs:
         del f["data"].attrs["total"]
     f["data"].attrs["total"] = total_samples
+    print(f"total_samples={total_samples}")
 
     f.close()
 

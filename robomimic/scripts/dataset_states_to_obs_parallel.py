@@ -33,6 +33,10 @@ Example usage:
     python dataset_states_to_obs.py --dataset /path/to/demo.hdf5 --output_name image.hdf5 \
         --done_mode 2 --camera_names agentview robot0_eye_in_hand --camera_height 84 --camera_width 84
 
+    # extract 84x84 image and depth observations
+    python dataset_states_to_obs.py --dataset /path/to/demo.hdf5 --output_name depth.hdf5 \
+        --done_mode 2 --camera_names agentview robot0_eye_in_hand --camera_height 84 --camera_width 84 --depth
+
     # (space saving option) extract 84x84 image observations with compression and without 
     # extracting next obs (not needed for pure imitation learning algos)
     python dataset_states_to_obs.py --dataset /path/to/demo.hdf5 --output_name image.hdf5 \
@@ -54,6 +58,7 @@ import h5py
 import argparse
 import numpy as np
 from copy import deepcopy
+from tqdm import tqdm
 
 import robomimic.utils.tensor_utils as TensorUtils
 import robomimic.utils.file_utils as FileUtils
@@ -86,8 +91,6 @@ def exclude_cameras_from_obs(traj, camera_names, store_voxel):
             del traj['obs'][f"{cam}_image"]
             del traj['obs'][f"{cam}_depth"]
             del traj['obs'][f"{cam}_rgbd"]
-    if not store_voxel:
-        del traj['obs']['voxels']
 
 
 def visualize_voxel(traj):
@@ -122,6 +125,10 @@ def extract_trajectory(
     initial_state, 
     states, 
     actions,
+    done_mode,
+    store_voxel=True,
+    camera_height=84, 
+    camera_width=84,
 ):
     """
     Helper function to extract observations, rewards, and dones along a trajectory using
@@ -144,15 +151,26 @@ def extract_trajectory(
         camera_height=args.camera_height, 
         camera_width=args.camera_width, 
         reward_shaping=args.shaped,
+        use_depth_obs=True,
+        render=True
     )
     assert states.shape[0] == actions.shape[0]
 
     # load the initial state
     env.reset()
-
+    env.env.viewer.set_camera(camera_id=0)
     obs = env.reset_to(initial_state)
 
-    
+    # maybe add in intrinsics and extrinsics for all cameras
+    camera_info = None
+    is_robosuite_env = EnvUtils.is_robosuite_env(env=env)
+    if is_robosuite_env:
+        camera_info = get_camera_info(
+            env=env,
+            camera_names=camera_names, 
+            camera_height=camera_height, 
+            camera_width=camera_width,
+        )
 
     traj = dict(
         obs=[], 
@@ -174,7 +192,8 @@ def extract_trajectory(
         else:
             # reset to simulator state to get observation
             next_obs = env.reset_to({"states" : states[t]})
-
+        print(actions[t-1])
+        env.env.render()
         # infer reward signal
         # note: our tasks use reward r(s'), reward AFTER transition, so this is
         #       the reward for the current timestep
@@ -190,6 +209,8 @@ def extract_trajectory(
             done = done or env.is_success()["task"]
         done = int(done)
 
+        
+
         # collect transition
         traj["obs"].append(obs)
         traj["next_obs"].append(next_obs)
@@ -203,6 +224,10 @@ def extract_trajectory(
     traj["obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["obs"])
     traj["next_obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["next_obs"])
 
+    if not store_voxel:
+        del traj["obs"]['voxels']
+        del traj["next_obs"]['voxels']
+
     # list to numpy array
     for k in traj:
         if k == "initial_state_dict":
@@ -213,44 +238,80 @@ def extract_trajectory(
         else:
             traj[k] = np.array(traj[k])
 
-    return traj
+    return traj, camera_info
+
+
+def get_camera_info(
+    env,
+    camera_names=None, 
+    camera_height=84, 
+    camera_width=84,
+):
+    """
+    Helper function to get camera intrinsics and extrinsics for cameras being used for observations.
+    """
+
+    # TODO: make this function more general than just robosuite environments
+    assert EnvUtils.is_robosuite_env(env=env)
+
+    if camera_names is None:
+        return None
+
+    camera_info = dict()
+    for cam_name in camera_names:
+        K = env.get_camera_intrinsic_matrix(camera_name=cam_name, camera_height=camera_height, camera_width=camera_width)
+        R = env.get_camera_extrinsic_matrix(camera_name=cam_name) # camera pose in world frame
+        if "eye_in_hand" in cam_name:
+            # convert extrinsic matrix to be relative to robot eef control frame
+            assert cam_name.startswith("robot0")
+            eef_site_name = env.base_env.robots[0].controller.eef_name
+            eef_pos = np.array(env.base_env.sim.data.site_xpos[env.base_env.sim.model.site_name2id(eef_site_name)])
+            eef_rot = np.array(env.base_env.sim.data.site_xmat[env.base_env.sim.model.site_name2id(eef_site_name)].reshape([3, 3]))
+            eef_pose = np.zeros((4, 4)) # eef pose in world frame
+            eef_pose[:3, :3] = eef_rot
+            eef_pose[:3, 3] = eef_pos
+            eef_pose[3, 3] = 1.0
+            eef_pose_inv = np.zeros((4, 4))
+            eef_pose_inv[:3, :3] = eef_pose[:3, :3].T
+            eef_pose_inv[:3, 3] = -eef_pose_inv[:3, :3].dot(eef_pose[:3, 3])
+            eef_pose_inv[3, 3] = 1.0
+            R = R.dot(eef_pose_inv) # T_E^W * T_W^C = T_E^C
+        camera_info[cam_name] = dict(
+            intrinsics=K.tolist(),
+            extrinsics=R.tolist(),
+        )
+    return camera_info
 
 def worker(x):
-    env_meta, args, camera_names, initial_state, states, actions = x
-    traj = extract_trajectory(
+    env_meta, args, camera_names, initial_state, states, actions, store_voxel = x
+    traj, camera_info = extract_trajectory(
         env_meta=env_meta,
         args=args,
         camera_names=camera_names,
         initial_state=initial_state, 
         states=states, 
         actions=actions,
+        store_voxel = store_voxel,
+        done_mode=args.done_mode,
+        camera_height=args.camera_height, 
+        camera_width=args.camera_width,
     )
-    return traj
+    return traj, camera_info
 
-def preprocess_depth(traj, cam_name, depth_minmax):
-    # depths.shape = (N, H, W, C)
-    minmax = depth_minmax[cam_name]
-    minmax_range = minmax[1] - minmax[0]
-    ndepths =(np.clip(traj['obs'][f'{cam_name}_depth'], minmax[0], minmax[1]) - minmax[0]) / minmax_range * 255
-    return ndepths.astype(np.uint8)
-
-def add_rgbd_obs(traj, camera_names, depth_minmax):
-    for cam_name in camera_names:
-        traj['obs'][f'{cam_name}_rgbd'] = np.concatenate([traj['obs'][f'{cam_name}_image'],
-                                                          preprocess_depth(traj, cam_name, depth_minmax)],
-                                                            axis=3)
-        traj['next_obs'][f'{cam_name}_rgbd'] = np.concatenate([traj['next_obs'][f'{cam_name}_image'],
-                                                            preprocess_depth(traj, cam_name, depth_minmax)],
-                                                            axis=3)
-        del traj['obs'][f'{cam_name}_depth']
-        del traj['next_obs'][f'{cam_name}_depth']
-    return traj
 
 def dataset_states_to_obs(args):
     store_voxel = args.store_voxel
+    if args.depth:
+        assert len(args.camera_names) > 0, "must specify camera names if using depth"
+
     # create environment to use for data processing
     env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=args.dataset)
-    camera_names = ['frontview', 'agentview', 'robot0_eye_in_hand']
+    # camera_names = ['robot0_eye_in_hand', 'spaceview',]
+    camera_names = args.camera_names
+    main_camera = args.main_camera
+    assert main_camera in camera_names, "ERROR: You need to include main_camera in camera_names."
+    # env_meta['env_kwargs']['main_camera'] = main_camera
+    print(camera_names)
     additional_camera_for_voxel = ['birdview', 'sideview', 'sideview2', 'backview'] if store_voxel else []
     camera_names = camera_names + additional_camera_for_voxel
 
@@ -260,6 +321,7 @@ def dataset_states_to_obs(args):
         camera_height=args.camera_height, 
         camera_width=args.camera_width, 
         reward_shaping=args.shaped,
+        use_depth_obs=args.depth,
     )
 
     print("==== Using environment with the following metadata ====")
@@ -316,11 +378,11 @@ def dataset_states_to_obs(args):
             actions_list.append(actions)
             
         with multiprocessing.Pool(num_workers) as pool:
-            trajs = pool.map(worker, [[env_meta, args, camera_names, initial_state_list[j], states_list[j], actions_list[j]] for j in range(len(initial_state_list))]) 
+            output = pool.map(worker, [[env_meta, args, camera_names, initial_state_list[j], states_list[j], actions_list[j], store_voxel] for j in range(len(initial_state_list))]) 
 
         for j, ind in enumerate(range(i, end)):
             ep = demos[ind]
-            traj = trajs[j]
+            traj, camera_info = output[j]
             exclude_cameras_from_obs(traj, additional_camera_for_voxel, store_voxel)
             # maybe copy reward or done signal from source file
             if args.copy_rewards:
@@ -351,11 +413,15 @@ def dataset_states_to_obs(args):
             # episode metadata
             if is_robosuite_env:
                 ep_data_grp.attrs["model_file"] = traj["initial_state_dict"]["model"] # model xml for this episode
+            
+            if camera_info is not None:
+                assert is_robosuite_env
+                ep_data_grp.attrs["camera_info"] = json.dumps(camera_info, indent=4)
             ep_data_grp.attrs["num_samples"] = traj["actions"].shape[0] # number of transitions in this episode
             total_samples += traj["actions"].shape[0]
             print("ep {}: wrote {} transitions to group {}".format(ind, ep_data_grp.attrs["num_samples"], ep))
         
-        del trajs
+
 
     # copy over all filter keys that exist in the original hdf5
     if "mask" in f:
@@ -414,8 +480,16 @@ if __name__ == "__main__":
         "--camera_names",
         type=str,
         nargs='+',
-        default=[],
+        default=['robot0_eye_in_hand', 'spaceview'],
         help="(optional) camera name(s) to use for image observations. Leave out to not use image observations.",
+    )
+
+    # set main camera which is used to get gripper-centric images
+    parser.add_argument(
+        "--main_camera",
+        type=str,
+        default='frontview',
+        help="(optional) main camera for gripper-centric images",
     )
 
     parser.add_argument(
@@ -430,6 +504,13 @@ if __name__ == "__main__":
         type=int,
         default=84,
         help="(optional) width of image observations",
+    )
+
+    # flag for including depth observations per camera
+    parser.add_argument(
+        "--depth", 
+        action='store_true',
+        help="(optional) use depth observations for each camera",
     )
 
     # specifies how the "done" signal is written. If "0", then the "done" signal is 1 wherever 

@@ -229,8 +229,11 @@ def extract_trajectory(
     traj["next_obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["next_obs"])
 
     if not store_voxel:
-        del traj["obs"]['voxels']
-        del traj["next_obs"]['voxels']
+        try:
+            del traj["obs"]['voxels']
+            del traj["next_obs"]['voxels']
+        except:
+            pass
 
     # list to numpy array
     for k in traj:
@@ -315,7 +318,7 @@ def dataset_states_to_obs(args):
     # create environment to use for data processing
     env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=args.dataset)
     # camera_names = ['robot0_eye_in_hand', 'spaceview',]
-    camera_names = args.camera_names
+    camera_names = args.camera_names.split(' ') if ' ' in args.camera_names else [args.camera_names]
     main_camera = args.main_camera
     assert main_camera in camera_names, "ERROR: You need to include main_camera in camera_names."
     # env_meta['env_kwargs']['main_camera'] = main_camera
@@ -487,8 +490,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--camera_names",
         type=str,
-        nargs='+',
-        default=['robot0_eye_in_hand', 'spaceview'],
+        default='spaceview',
         help="(optional) camera name(s) to use for image observations. Leave out to not use image observations.",
     )
 
