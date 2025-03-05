@@ -219,13 +219,13 @@ class ObservationEncoder(Module):
         assert self._locked, "ObservationEncoder: @make has not been called yet"
 
         # ensure all modalities that the encoder handles are present
-        assert set(self.obs_shapes.keys()).issubset(obs_dict), "ObservationEncoder: {} does not contain all modalities {}".format(
-            list(obs_dict.keys()), list(self.obs_shapes.keys())
-        )
+        # assert set(self.obs_shapes.keys()).issubset(obs_dict), "ObservationEncoder: {} does not contain all modalities {}".format(
+        #     list(obs_dict.keys()), list(self.obs_shapes.keys())
+        # )
 
         # process modalities by order given by @self.obs_shapes
         feats = []
-        for k in self.obs_shapes:
+        for k in obs_dict.keys():
             x = obs_dict[k]
             # maybe process encoder input with randomizer
             if self.obs_randomizers[k] is not None:
