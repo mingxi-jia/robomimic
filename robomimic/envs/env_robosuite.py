@@ -315,6 +315,8 @@ class EnvRobosuite(EB.EnvBase):
 
             all_pcds = o3d.geometry.PointCloud()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
+                if "eye_in_hand" in camera_name:
+                    continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)

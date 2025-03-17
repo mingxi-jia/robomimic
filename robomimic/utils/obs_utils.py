@@ -7,9 +7,12 @@ from copy import deepcopy
 from collections import OrderedDict
 from scipy.spatial.transform import Rotation
 import re
+import open3d as o3d
 
 import torch
 import torch.nn.functional as F
+from pytorch3d.ops import sample_farthest_points
+
 
 import robomimic.utils.tensor_utils as TU
 from robosuite.utils.camera_utils import get_real_depth_map, get_camera_extrinsic_matrix, get_camera_intrinsic_matrix
@@ -384,11 +387,39 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
 
 def populate_point_num(pcd, point_num):
     if pcd.shape[0] < point_num:
-        pcd = np.concatenate([pcd, pcd[np.random.choice(pcd.shape[0], point_num-pcd.shape[0])]], axis=0)
+        pad_pcd = np.repeat(pcd[0:1], point_num-pcd.shape[0], axis=0) # get a random point
+        # pad_pcd[:,-1] = -1 # label it as the invalid padding pcd
+        pcd = np.concatenate([pcd, pad_pcd], axis=0)
     else:
         shuffle_idx = np.random.permutation(pcd.shape[0])[:point_num]
         pcd = pcd[shuffle_idx]
+        # _, indices = sample_farthest_points(torch.from_numpy(pcd[None, :, :3]), K=point_num)
+        # indices = indices[0].numpy()
+        # pcd = pcd[indices]
     return pcd
+
+def o3d2np(pcd_o3d, extra_feature=None):
+    # pcd: (n, 3)
+    # color: (n, 3)
+    xyz = np.asarray(pcd_o3d.points)
+    rgb = np.asarray(pcd_o3d.colors)
+    pcd_np = np.concatenate([xyz, rgb], axis=1)
+    if extra_feature is not None:
+        assert pcd_np.shape[0] == extra_feature.shape[0]
+        pcd_np = np.concatenate([pcd_np, extra_feature], axis=1)
+    return pcd_np
+
+def np2o3d(pcd, color=None):
+    # pcd: (n, 3)
+    # color: (n, 3)
+    pcd_o3d = o3d.geometry.PointCloud()
+    pcd_o3d.points = o3d.utility.Vector3dVector(pcd)
+    if color is not None and color.shape[0] > 0:
+        assert pcd.shape[0] == color.shape[0]
+        assert color.max() <= 1
+        assert color.min() >= 0
+        pcd_o3d.colors = o3d.utility.Vector3dVector(color)
+    return pcd_o3d
 
 def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw):
     """
@@ -406,20 +437,18 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw):
     T_W_e = np.eye(4)
     T_W_e[:3,:3] = Rotation.from_quat(T_W_e_xyzqxyzw[3:]).as_matrix()
     T_W_e[:3, 3] = T_W_e_xyzqxyzw[:3]
-    # Assuming ee_pose contains the position of the end-effector
-    T_e_W = np.linalg.inv(T_W_e)
     # Convert points from world coordinates to homogeneous coordinates
     num_points = points_world.shape[0]
     points_homogeneous = np.hstack([points_world, np.ones((num_points, 1))])
 
-    # Apply the inverse transformation
-    transformed_homogeneous = (T_e_W @ points_homogeneous.T).T
+    # Apply the inverse transformation: np.linalg.inv(T_W_e)
+    transformed_homogeneous = (np.linalg.inv(T_W_e) @ points_homogeneous.T).T
 
     # Convert back to Cartesian coordinates (drop the homogeneous coordinate)
     points_e = transformed_homogeneous[:, :3]
     return points_e
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poss, abs_action, gripper_centric=False, bbox_size_m = 0.2):
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -433,25 +462,38 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poss, abs_action, gripper_centr
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
-    fix_point_num = 512 if gripper_centric else 1024
+    fix_point_num = 512 if gripper_centric_crop else 1024
+    batch_size = pcds.shape[0]
+    eef_poses = np.repeat(previous_eef_poses, batch_size, axis=0)
 
     # toss out the points that are away from the gripper
     bbox_size_x, bbox_size_y, bbox_size_z = bbox_size_m, bbox_size_m, bbox_size_m
     processed_pcds = []
-    for pcd, previous_eef_pos in zip(pcds, previous_eef_poss):
-        if gripper_centric:
-            gripper_pos = previous_eef_pos
+    is_empty = [False] * len(pcds)
+    for i, (pcd, pos) in enumerate(zip(pcds, eef_poses)):
+        if gripper_centric_crop:
+            gripper_pos = pos
             mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_x / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_x / 2))
             mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_y / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_y / 2))
             mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_z / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_z / 2))
             mask = mask_x & mask_y & mask_z
-            p = populate_point_num(pcd[mask], fix_point_num) if mask.sum()>0 else pcd[:fix_point_num]
-            p[...,:3] = NotImplementedError if abs_action else transform_pcd_to_ee_frame(p[...,:3], previous_eef_pos)
+            if mask.sum() > 50:
+                p = populate_point_num(pcd[mask], fix_point_num) 
+            else: 
+                p = np.repeat(np.zeros([1,6]), fix_point_num, axis=0) 
+                is_empty[i] = True
+            p[...,:3] = transform_pcd_to_ee_frame(p[...,:3], pos)
         else:
             p = populate_point_num(pcd, fix_point_num)
         processed_pcds.append(p)
 
-    return np.stack(processed_pcds)
+    return np.stack(processed_pcds).astype(np.float32), is_empty
+
+def get_temporal_obs_and_goal_pcd(obs, goal):
+    current_pcd = np.concatenate([obs, np.zeros((*obs.shape[:-1],) +(1,))], axis=-1)
+    goal_pcd = np.concatenate([goal, np.ones((*goal.shape[:-1],) +(1,))], axis=-1)
+    axis_ind = 0 if len(obs.shape) == 3 else 1
+    return np.concatenate([current_pcd, goal_pcd], axis=axis_ind)
 
 def register_obs_key(target_class):
     assert target_class not in OBS_MODALITY_CLASSES, f"Already registered modality {target_class}!"
