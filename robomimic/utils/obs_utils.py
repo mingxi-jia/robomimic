@@ -387,9 +387,10 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
 
 def populate_point_num(pcd, point_num):
     if pcd.shape[0] < point_num:
-        pad_pcd = np.repeat(pcd[0:1], point_num-pcd.shape[0], axis=0) # get a random point
-        # pad_pcd[:,-1] = -1 # label it as the invalid padding pcd
-        pcd = np.concatenate([pcd, pad_pcd], axis=0)
+        # pad_pcd = np.repeat(pcd[0:1], point_num-pcd.shape[0], axis=0) # get a random point
+        extra_choice = np.random.choice(pcd.shape[0], point_num-pcd.shape[0], replace=True)
+        # choice = np.concatenate((np.arange(points.shape[0]), extra_choice))
+        pcd = np.concatenate([pcd, pcd[extra_choice]], axis=0)
     else:
         shuffle_idx = np.random.permutation(pcd.shape[0])[:point_num]
         pcd = pcd[shuffle_idx]
@@ -421,7 +422,7 @@ def np2o3d(pcd, color=None):
         pcd_o3d.colors = o3d.utility.Vector3dVector(color)
     return pcd_o3d
 
-def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw):
+def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
     """
     Transform a set of points from the world coordinate system to the 'e' coordinate system.
     
@@ -433,22 +434,29 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw):
     Returns:
         numpy.ndarray: An (N, 3) array of points expressed in the 'e' coordinate system.
     """
+    assert local_type in ['xyz', 'se3'] 
     # Construct T_W_e mat
     T_W_e = np.eye(4)
-    T_W_e[:3,:3] = Rotation.from_quat(T_W_e_xyzqxyzw[3:]).as_matrix()
-    T_W_e[:3, 3] = T_W_e_xyzqxyzw[:3]
-    # Convert points from world coordinates to homogeneous coordinates
-    num_points = points_world.shape[0]
-    points_homogeneous = np.hstack([points_world, np.ones((num_points, 1))])
+    if local_type == 'se3':
+        T_W_e[:3,:3] = Rotation.from_quat(T_W_e_xyzqxyzw[3:]).as_matrix()
+        T_W_e[:3, 3] = T_W_e_xyzqxyzw[:3]
+        # Convert points from world coordinates to homogeneous coordinates
+        num_points = points_world.shape[0]
+        points_homogeneous = np.hstack([points_world, np.ones((num_points, 1))])
 
-    # Apply the inverse transformation: np.linalg.inv(T_W_e)
-    transformed_homogeneous = (np.linalg.inv(T_W_e) @ points_homogeneous.T).T
+        # Apply the inverse transformation: np.linalg.inv(T_W_e)
+        transformed_homogeneous = (np.linalg.inv(T_W_e) @ points_homogeneous.T).T
 
-    # Convert back to Cartesian coordinates (drop the homogeneous coordinate)
-    points_e = transformed_homogeneous[:, :3]
-    return points_e
+        # Convert back to Cartesian coordinates (drop the homogeneous coordinate)
+        points_e = transformed_homogeneous[:, :3]
+        return points_e
+    elif local_type == 'xyz':
+        points_e = deepcopy(points_world)
+        points_e[:,:3] = points_e[:,:3] - T_W_e_xyzqxyzw[:3]
+        return points_e
+    
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2):
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz'):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -462,7 +470,7 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
-    fix_point_num = 512 if gripper_centric_crop else 1024
+    fix_point_num = 1024 if gripper_centric_crop else 1024
     batch_size = pcds.shape[0]
     eef_poses = np.repeat(previous_eef_poses, batch_size, axis=0)
 
@@ -471,6 +479,7 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
     processed_pcds = []
     is_empty = [False] * len(pcds)
     for i, (pcd, pos) in enumerate(zip(pcds, eef_poses)):
+        pcd = pcd[pcd[:,2]>=0.808] # delete all table points
         if gripper_centric_crop:
             gripper_pos = pos
             mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_x / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_x / 2))
@@ -482,12 +491,12 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
             else: 
                 p = np.repeat(np.zeros([1,6]), fix_point_num, axis=0) 
                 is_empty[i] = True
-            p[...,:3] = transform_pcd_to_ee_frame(p[...,:3], pos)
+            p[...,:3] = transform_pcd_to_ee_frame(p[...,:3], pos, local_type)
         else:
             p = populate_point_num(pcd, fix_point_num)
         processed_pcds.append(p)
 
-    return np.stack(processed_pcds).astype(np.float32), is_empty
+    return np.stack(processed_pcds).astype(np.float32), np.array(is_empty)
 
 def get_temporal_obs_and_goal_pcd(obs, goal):
     current_pcd = np.concatenate([obs, np.zeros((*obs.shape[:-1],) +(1,))], axis=-1)
