@@ -1,0 +1,10 @@
+dataset_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/raw_datasets/pose_estimation/
+output_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/sqsh_datasets/
+output_folder: pose_estimation
+dataset_file: pose_estimation.hdf5
+num_demos: 500
+num_workers: 10
+env_xml_filename: table_arena.xml
+camera_obs_modality: separate
+done_mode: 2
+camera_resolution: 128

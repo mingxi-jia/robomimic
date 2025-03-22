@@ -1,0 +1,9 @@
+dataset_dir: your/dataset/dir/ 
+output_dir: your/output/dir/
+dataset_file: your/dataset/file.hdf5 # has to be within dataset_dir. Can be within subdirectories.
+num_cameras: 60 # number of additional camera views to generate
+num_demos: 1 # number of demonstrations within the dataset to run
+num_workers: 1 # number of workers to use in parallel
+env_xml_filename: arena_for_dataset.xml #  Has to match dataset. Can be one of table_arena, bins_arena, pegs_arena, empty_arena, multi_table_arena. 
+camera_obs_modality: rgbd # rgbd or separate which is RGB and depth separately. NOTE: RGBD results in larger file sizes
+done_mode: 2 # 0: only done at the end of the trajectory, 1: done when task is a success, 2: both

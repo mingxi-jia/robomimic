@@ -1,0 +1,10 @@
+dataset_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/raw_datasets/generated/
+output_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/datasets/mimicgen/
+output_folder: robomimic_lift_MG_n600
+dataset_file: block_lifting/demo_src_block_lifting_task_D0/demo.hdf5
+num_demos: 1000
+num_workers: 1
+env_xml_filename: table_arena.xml
+camera_obs_modality: separate
+done_mode: 2
+camera_resolution: 128

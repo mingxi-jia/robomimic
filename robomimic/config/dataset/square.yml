@@ -1,0 +1,10 @@
+dataset_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/raw_datasets/robomimic/
+output_dir: /mnt/30783d39-fb85-4ca4-a8da-e16e50e50b0f/data/mimicgen/datasets/robomimic/
+output_folder: square_d0
+dataset_file: square/ph/square_d0.hdf5
+num_demos: 10
+num_workers: 1
+env_xml_filename: pegs_arena.xml
+camera_obs_modality: separate
+done_mode: 2
+camera_resolution: 128
