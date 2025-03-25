@@ -456,7 +456,7 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         return points_e
     
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz'):
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=1024):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -470,7 +470,8 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
-    fix_point_num = 1024 if gripper_centric_crop else 1024
+    # 384 is an empirical number for bbox_size_m=0.3
+    # fix_point_num = 384 if gripper_centric_crop else 1024
     batch_size = pcds.shape[0]
     eef_poses = np.repeat(previous_eef_poses, batch_size, axis=0)
 
