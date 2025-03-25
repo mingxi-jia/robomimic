@@ -64,6 +64,40 @@ WORKSPACE_MAX = {
                 'spaceview': 1.40,
                 }
 
+center = np.array([0, 0, 0.7])
+ws_size = 1.0
+WORKSPACE = np.array([
+    [center[0] - ws_size/2, center[0] + ws_size/2],
+    [center[1] - ws_size/2, center[1] + ws_size/2],
+    [center[2], center[2] + ws_size]
+])
+
+def depth2fgpcd(depth, mask, cam_params):
+    # depth: (h, w)
+    # fgpcd: (n, 3)
+    # mask: (h, w)
+    h, w = depth.shape
+    mask = np.logical_and(mask, depth > 0)
+    # mask = (depth <= 0.599/0.8)
+    fgpcd = np.zeros((mask.sum(), 3))
+    fx, fy, cx, cy = cam_params
+    pos_x, pos_y = np.meshgrid(np.arange(w), np.arange(h))
+    pos_x = pos_x[mask]
+    pos_y = pos_y[mask]
+    fgpcd[:, 0] = (pos_x - cx) * depth[mask] / fx
+    fgpcd[:, 1] = (pos_y - cy) * depth[mask] / fy
+    fgpcd[:, 2] = depth[mask]
+    return fgpcd
+
+def rgbd2pcd(rgb, depth, intrinsics, extrinsics):
+    pcd = depth2fgpcd(depth, intrinsics)                
+    trans_pcd = np.einsum('ij,jk->ik', extrinsics, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
+    trans_pcd = trans_pcd[:3, :].T
+
+    mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
+    pcd_WRT_world = np.concatenate(trans_pcd[mask], rgb.reshape(-1, 3)[mask].astype(np.float64) / 255, axis=1)
+    return pcd_WRT_world
+
 
 def clip_depth(raw_depth, depth_key):
     depth_min, depth_max = DEPTH_MINMAX[depth_key]
