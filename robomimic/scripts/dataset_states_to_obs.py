@@ -323,7 +323,7 @@ def dataset_states_to_obs(args):
     assert main_camera in camera_names, "ERROR: You need to include main_camera in camera_names."
     # env_meta['env_kwargs']['main_camera'] = main_camera
     print(camera_names)
-    additional_camera_for_voxel = ['birdview', 'sideview', 'sideview2', 'backview'] if store_voxel else []
+    additional_camera_for_voxel = ['sideview2', 'backview'] if store_voxel else []
     camera_names = camera_names + additional_camera_for_voxel
 
     env = EnvUtils.create_env_for_data_processing(
@@ -528,6 +528,12 @@ if __name__ == "__main__":
         "--render", 
         action='store_true',
         help="(optional) render frames to check demonstrations",
+    )
+
+    parser.add_argument(
+        "--multiview", 
+        action='store_true',
+        help="(optional) render pcd from multiple views",
     )
 
     # specifies how the "done" signal is written. If "0", then the "done" signal is 1 wherever 

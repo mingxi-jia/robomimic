@@ -75,6 +75,10 @@ def clip_depth(raw_depth, depth_key):
         NotImplementedError
     return raw_depth
 
+def normalize_depth(depth, camera_name):
+    depth_min, depth_max = DEPTH_MINMAX[camera_name]
+    return (depth - depth_min) / (depth_max - depth_min)
+
 def convert_rgbd_to_pcd_batch(rgbd_images, camera_intrinsic, camera_extrinsic, gripper_centric):
     """
     Convert a batch of RGBD images to point cloud data (PCD).
