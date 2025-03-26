@@ -32,26 +32,10 @@ except ImportError:
 
 from robomimic.utils.obs_utils import (DEPTH_MINMAX, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch)
+                                       convert_rgbd_to_pcd_batch, depth2fgpcd)
 
 
 
-def depth2fgpcd(depth, mask, cam_params):
-    # depth: (h, w)
-    # fgpcd: (n, 3)
-    # mask: (h, w)
-    h, w = depth.shape
-    mask = np.logical_and(mask, depth > 0)
-    # mask = (depth <= 0.599/0.8)
-    fgpcd = np.zeros((mask.sum(), 3))
-    fx, fy, cx, cy = cam_params
-    pos_x, pos_y = np.meshgrid(np.arange(w), np.arange(h))
-    pos_x = pos_x[mask]
-    pos_y = pos_y[mask]
-    fgpcd[:, 0] = (pos_x - cx) * depth[mask] / fx
-    fgpcd[:, 1] = (pos_y - cy) * depth[mask] / fy
-    fgpcd[:, 2] = depth[mask]
-    return fgpcd
 
 def np2o3d(pcd, color=None):
     # pcd: (n, 3)

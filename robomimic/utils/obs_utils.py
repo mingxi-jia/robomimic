@@ -90,7 +90,9 @@ def depth2fgpcd(depth, mask, cam_params):
     return fgpcd
 
 def rgbd2pcd(rgb, depth, intrinsics, extrinsics):
-    pcd = depth2fgpcd(depth, intrinsics)                
+    cam_param = [intrinsics[0, 0], intrinsics[1, 1], intrinsics[0, 2], intrinsics[1, 2]]
+    mask = np.ones_like(depth, dtype=bool)
+    pcd = depth2fgpcd(depth, mask, cam_param)                
     trans_pcd = np.einsum('ij,jk->ik', extrinsics, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
     trans_pcd = trans_pcd[:3, :].T
 
@@ -112,6 +114,10 @@ def clip_depth(raw_depth, depth_key):
 def normalize_depth(depth, camera_name):
     depth_min, depth_max = DEPTH_MINMAX[camera_name]
     return (depth - depth_min) / (depth_max - depth_min)
+
+def unnormalize_depth(depth, camera_name):
+    depth_min, depth_max = DEPTH_MINMAX[camera_name]
+    return depth * (depth_max - depth_min) + depth_min
 
 def convert_rgbd_to_pcd_batch(rgbd_images, camera_intrinsic, camera_extrinsic, gripper_centric):
     """
@@ -296,19 +302,6 @@ def mask_batch(images, bb_centers, output_size):
 
     return np.stack(masked_images)
 
-def depth2fgpcd(depth, camera_intrinsic):
-    # depth: (n, h, w)
-    # fgpcd: (n, h*w, 3)
-    n, h, w = depth.shape
-    # mask = (depth <= 0.599/0.8)
-    fgpcd = np.zeros((n, h*w, 3))
-    fx, fy, cx, cy = camera_intrinsic[0,0], camera_intrinsic[1,1], camera_intrinsic[0,2], camera_intrinsic[1,2]
-    pos_x, pos_y = np.meshgrid(np.arange(w), np.arange(h))
-    pos_x, pos_y = pos_x[None, ...], pos_y[None, ...]
-    fgpcd[:, :, 0] = ((pos_x - cx) * depth / fx).reshape(n, -1)
-    fgpcd[:, :, 1] = ((pos_y - cy) * depth / fy).reshape(n, -1)
-    fgpcd[:, :, 2] = depth.reshape(n, -1)
-    return fgpcd
 
 def clip_depth_alone_gripper_x_batch(goal_key, rgbd_images, gripper_pose, camera_intrinsic, camera_extrinsic, depth_normalization_around_gripper, x_range=0.30):
     """
