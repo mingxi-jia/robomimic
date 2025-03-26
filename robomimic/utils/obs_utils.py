@@ -113,6 +113,7 @@ def clip_depth(raw_depth, depth_key):
 
 def normalize_depth(depth, camera_name):
     depth_min, depth_max = DEPTH_MINMAX[camera_name]
+    depth = np.clip(depth, depth_min, depth_max)
     return (depth - depth_min) / (depth_max - depth_min)
 
 def unnormalize_depth(depth, camera_name):
