@@ -65,12 +65,32 @@ WORKSPACE_MAX = {
                 }
 
 center = np.array([0, 0, 0.7])
-ws_size = 1.0
+WS_SIZE = 0.6
 WORKSPACE = np.array([
-    [center[0] - ws_size/2, center[0] + ws_size/2],
-    [center[1] - ws_size/2, center[1] + ws_size/2],
-    [center[2], center[2] + ws_size]
+    [center[0] - WS_SIZE/2, center[0] + WS_SIZE/2],
+    [center[1] - WS_SIZE/2, center[1] + WS_SIZE/2],
+    [center[2], center[2] + WS_SIZE]
 ])
+
+def np2o3d(pcd, color=None):
+    # pcd: (n, 3)
+    # color: (n, 3)
+    pcd_o3d = o3d.geometry.PointCloud()
+    pcd_o3d.points = o3d.utility.Vector3dVector(pcd)
+    if color is not None and color.shape[0] > 0:
+        assert pcd.shape[0] == color.shape[0]
+        assert color.max() <= 1
+        assert color.min() >= 0
+        pcd_o3d.colors = o3d.utility.Vector3dVector(color)
+    return pcd_o3d
+
+def o3d2np(pcd_o3d):
+    # pcd: (n, 3)
+    # color: (n, 3)
+    xyz = np.asarray(pcd_o3d.points)
+    rgb = np.asarray(pcd_o3d.colors)
+    pcd_np = np.concatenate([xyz, rgb], axis=1)
+    return pcd_np
 
 def depth2fgpcd(depth, mask, cam_params):
     # depth: (h, w)
@@ -97,9 +117,8 @@ def rgbd2pcd(rgb, depth, intrinsics, extrinsics):
     trans_pcd = trans_pcd[:3, :].T
 
     mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
-    pcd_WRT_world = np.concatenate(trans_pcd[mask], rgb.reshape(-1, 3)[mask].astype(np.float64) / 255, axis=1)
+    pcd_WRT_world = np.concatenate([trans_pcd[mask], rgb.reshape(-1, 3)[mask].astype(np.float64) / 255], axis=1)
     return pcd_WRT_world
-
 
 def clip_depth(raw_depth, depth_key):
     depth_min, depth_max = DEPTH_MINMAX[depth_key]
@@ -431,28 +450,7 @@ def populate_point_num(pcd, point_num):
         # pcd = pcd[indices]
     return pcd
 
-def o3d2np(pcd_o3d, extra_feature=None):
-    # pcd: (n, 3)
-    # color: (n, 3)
-    xyz = np.asarray(pcd_o3d.points)
-    rgb = np.asarray(pcd_o3d.colors)
-    pcd_np = np.concatenate([xyz, rgb], axis=1)
-    if extra_feature is not None:
-        assert pcd_np.shape[0] == extra_feature.shape[0]
-        pcd_np = np.concatenate([pcd_np, extra_feature], axis=1)
-    return pcd_np
 
-def np2o3d(pcd, color=None):
-    # pcd: (n, 3)
-    # color: (n, 3)
-    pcd_o3d = o3d.geometry.PointCloud()
-    pcd_o3d.points = o3d.utility.Vector3dVector(pcd)
-    if color is not None and color.shape[0] > 0:
-        assert pcd.shape[0] == color.shape[0]
-        assert color.max() <= 1
-        assert color.min() >= 0
-        pcd_o3d.colors = o3d.utility.Vector3dVector(color)
-    return pcd_o3d
 
 def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
     """
@@ -488,7 +486,7 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         return points_e
     
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=1024):
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=768):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     

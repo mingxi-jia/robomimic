@@ -30,32 +30,14 @@ try:
 except ImportError:
     MUJOCO_EXCEPTIONS = []
 
-from robomimic.utils.obs_utils import (DEPTH_MINMAX, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
+from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch, depth2fgpcd)
+                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np)
 
 
 
 
-def np2o3d(pcd, color=None):
-    # pcd: (n, 3)
-    # color: (n, 3)
-    pcd_o3d = o3d.geometry.PointCloud()
-    pcd_o3d.points = o3d.utility.Vector3dVector(pcd)
-    if color is not None and color.shape[0] > 0:
-        assert pcd.shape[0] == color.shape[0]
-        assert color.max() <= 1
-        assert color.min() >= 0
-        pcd_o3d.colors = o3d.utility.Vector3dVector(color)
-    return pcd_o3d
 
-def o3d2np(pcd_o3d):
-    # pcd: (n, 3)
-    # color: (n, 3)
-    xyz = np.asarray(pcd_o3d.points)
-    rgb = np.asarray(pcd_o3d.colors)
-    pcd_np = np.concatenate([xyz, rgb], axis=1)
-    return pcd_np
 
 
 class EnvRobosuite(EB.EnvBase):
@@ -282,19 +264,12 @@ class EnvRobosuite(EB.EnvBase):
             
 
         if self.env.use_camera_obs:
-            center = np.array([0, 0, 0.7])
-            ws_size = 0.6
-            workspace = np.array([
-                [center[0] - ws_size/2, center[0] + ws_size/2],
-                [center[1] - ws_size/2, center[1] + ws_size/2],
-                [center[2], center[2] + ws_size]
-            ])
 
             # voxel_bound = np.array([
             #     [center[0] - ws_size/2, center[1] - ws_size/2, center[2] - 0.05],
             #     [center[0] + ws_size/2, center[1] + ws_size/2, center[2] - 0.05 + ws_size],
             # ])
-            voxel_bound = workspace.T
+            voxel_bound = WORKSPACE.T
             voxel_size = 64
 
             all_pcds = o3d.geometry.PointCloud()
@@ -325,13 +300,13 @@ class EnvRobosuite(EB.EnvBase):
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
 
-                mask = (trans_pcd[:, 0] > workspace[0, 0]) * (trans_pcd[:, 0] < workspace[0, 1]) * (trans_pcd[:, 1] > workspace[1, 0]) * (trans_pcd[:, 1] < workspace[1, 1]) * (trans_pcd[:, 2] > workspace[2, 0]) * (trans_pcd[:, 2] < workspace[2, 1])
+                mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
 
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
 
                 all_pcds += pcd_o3d
 
-            voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(all_pcds, voxel_size=ws_size/voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
+            voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(all_pcds, voxel_size=WS_SIZE/voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
             voxels = voxel_grid.get_voxels()  # returns list of voxels
             if len(voxels) == 0:
                 np_voxels = np.zeros([4, voxel_size, voxel_size, voxel_size], dtype=np.uint8)
