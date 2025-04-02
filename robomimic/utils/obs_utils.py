@@ -486,7 +486,7 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         return points_e
     
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=768):
+def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=1024):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -510,7 +510,7 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
     processed_pcds = []
     is_empty = [False] * len(pcds)
     for i, (pcd, pos) in enumerate(zip(pcds, eef_poses)):
-        pcd = pcd[pcd[:,2]>=0.808] # delete all table points
+        # pcd = pcd[pcd[:,2]>=0.808] # delete all table points
         if gripper_centric_crop:
             gripper_pos = pos
             mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_x / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_x / 2))
