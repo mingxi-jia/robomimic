@@ -66,6 +66,7 @@ WORKSPACE_MAX = {
 
 center = np.array([0, 0, 0.7])
 WS_SIZE = 0.6
+VOXEL_RESO = 64
 WORKSPACE = np.array([
     [center[0] - WS_SIZE/2, center[0] + WS_SIZE/2],
     [center[1] - WS_SIZE/2, center[1] + WS_SIZE/2],
@@ -450,7 +451,36 @@ def populate_point_num(pcd, point_num):
         # pcd = pcd[indices]
     return pcd
 
+def pcd_to_voxel(pcds: np.ndarray, voxel_size: float = 0.01):
+    assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
+    assert (pcds[0, :,3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
+    # pcd: (n, 6)
+    voxels = []
+    voxel_bound = WORKSPACE.T
+    for pcd in pcds:
+        p = o3d.geometry.PointCloud()
+        p.points = o3d.utility.Vector3dVector(pcd[:,:3])
+        p.colors = o3d.utility.Vector3dVector(pcd[:,3:6])
+        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(p, voxel_size=voxel_size, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
+        voxel = voxel_grid.get_voxels()  # returns list of voxels
+        if len(voxel) == 0:
+            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
+        else:
+            indices = np.stack(list(vx.grid_index for vx in voxel))
+            colors = np.stack(list(vx.color for vx in voxel))
 
+            mask = (indices > 0) * (indices < voxel_size)
+            indices = indices[mask.all(axis=1)]
+            colors = colors[mask.all(axis=1)]
+
+            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
+            np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
+            np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T
+
+            np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
+            np_voxels = np.flip(np_voxels, (1, 2))
+        voxels.append(np_voxels)
+    return np.stack(voxels)
 
 def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
     """
@@ -482,11 +512,11 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         return points_e
     elif local_type == 'xyz':
         points_e = deepcopy(points_world)
-        points_e[:,:3] = points_e[:,:3] - T_W_e_xyzqxyzw[:3]
+        points_e = points_e - T_W_e_xyzqxyzw[:3]
         return points_e
     
 
-def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=False, bbox_size_m = 0.2, local_type='xyz', fix_point_num=1024):
+def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz', fix_point_num=1024):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -500,34 +530,57 @@ def crop_pcd_to_gripper_batch(pcds, previous_eef_poses, gripper_centric_crop=Fal
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
-    # 384 is an empirical number for bbox_size_m=0.3
-    # fix_point_num = 384 if gripper_centric_crop else 1024
-    batch_size = pcds.shape[0]
-    eef_poses = np.repeat(previous_eef_poses, batch_size, axis=0)
 
-    # toss out the points that are away from the gripper
-    bbox_size_x, bbox_size_y, bbox_size_z = bbox_size_m, bbox_size_m, bbox_size_m
+    pcds[...,:3] = transform_pcd_to_ee_frame(pcds[...,:3], previous_eef_poses[0], local_type)
+    pcds = populate_pcd_batch(pcds, fix_point_num) 
+    
+    return pcds.astype(np.float32)
+
+def populate_pcd_batch(pcds, point_num):
     processed_pcds = []
-    is_empty = [False] * len(pcds)
-    for i, (pcd, pos) in enumerate(zip(pcds, eef_poses)):
-        # pcd = pcd[pcd[:,2]>=0.808] # delete all table points
-        if gripper_centric_crop:
-            gripper_pos = pos
-            mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_x / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_x / 2))
-            mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_y / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_y / 2))
-            mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_z / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_z / 2))
-            mask = mask_x & mask_y & mask_z
-            if mask.sum() > 50:
-                p = populate_point_num(pcd[mask], fix_point_num) 
-            else: 
-                p = np.repeat(np.zeros([1,6]), fix_point_num, axis=0) 
-                is_empty[i] = True
-            p[...,:3] = transform_pcd_to_ee_frame(p[...,:3], pos, local_type)
-        else:
-            p = populate_point_num(pcd, fix_point_num)
+    for i, pcd in enumerate(pcds):
+        p = populate_point_num(pcd, point_num) 
         processed_pcds.append(p)
+    return np.stack(processed_pcds)
 
-    return np.stack(processed_pcds).astype(np.float32), np.array(is_empty)
+def crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num=1024):
+    gripper_pos = pos
+    mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_m / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_m / 2))
+    mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_m / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_m / 2))
+    mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_m / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_m / 2))
+    mask = mask_x & mask_y & mask_z
+    if mask.sum() > 50:
+        p = populate_point_num(pcd[mask], fix_point_num) 
+        is_empty = False
+    else: 
+        p = np.repeat(np.zeros([1,6]), fix_point_num, axis=0) 
+        is_empty = True
+    return p, is_empty
+
+def crop_local_pcd_batch(pcds, gripper_pose, bbox_size_m=0.3, fix_point_num=1024):
+    """
+    Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
+    
+    Parameters:
+    - pcd: array of float point cloud in shape (batch_size, height, width, channels), row is y and column is x
+    - robot0_eef_poss: array of 3d positions of shape (batch_size, 3) in world frame
+    
+    Returns:
+    - array of images of shape (batch_size, height, width, channels), np.uint8
+    """
+    assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
+    
+    if gripper_pose.shape[0] == 1:
+        poses = np.repeat(gripper_pose, pcds.shape[0], axis=0)
+    
+    processed_pcds = []
+    is_emptys = []
+    for i, (pcd, pos) in enumerate(zip(pcds, poses)):
+        p, is_emp = crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num)
+        processed_pcds.append(p)
+        is_emptys.append(is_emp)
+
+    return np.stack(processed_pcds), np.array(is_emptys)
 
 def get_temporal_obs_and_goal_pcd(obs, goal):
     current_pcd = np.concatenate([obs, np.zeros((*obs.shape[:-1],) +(1,))], axis=-1)
