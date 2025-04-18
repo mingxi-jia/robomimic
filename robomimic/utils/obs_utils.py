@@ -516,7 +516,7 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         return points_e
     
 
-def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz', fix_point_num=1024):
+def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz'):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -529,11 +529,18 @@ def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz', fix_point_num
     Returns:
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
+    is_batch = False
+    if len(pcds.shape) == 4:
+        is_batch = True
+        n_envs, n_pcd, num_points, dim = pcds.shape
+        pcds = pcds.reshape(n_envs * n_pcd, num_points, dim)
+
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
 
     pcds[...,:3] = transform_pcd_to_ee_frame(pcds[...,:3], previous_eef_poses[0], local_type)
-    pcds = populate_pcd_batch(pcds, fix_point_num) 
     
+    if is_batch:
+        pcds = pcds.reshape(n_envs, n_pcd, num_points, dim)
     return pcds.astype(np.float32)
 
 def populate_pcd_batch(pcds, point_num):
@@ -568,19 +575,34 @@ def crop_local_pcd_batch(pcds, gripper_pose, bbox_size_m=0.3, fix_point_num=1024
     Returns:
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
+    is_batch = False
+    if len(pcds.shape) == 4:
+        is_batch = True
+        n_envs, n_pcd, num_points, dim = pcds.shape
+        pcds = pcds.reshape(n_envs * n_pcd, num_points, dim)
+        gripper_pose = np.repeat(gripper_pose[:,None], n_pcd, axis=1)
+        gripper_pose = gripper_pose.reshape(n_envs * n_pcd, -1)
+    else:
+        n_pcd, num_points, dim = pcds.shape
+
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
     
     if gripper_pose.shape[0] == 1:
-        poses = np.repeat(gripper_pose, pcds.shape[0], axis=0)
+        gripper_pose = np.repeat(gripper_pose, pcds.shape[0], axis=0)
     
     processed_pcds = []
     is_emptys = []
-    for i, (pcd, pos) in enumerate(zip(pcds, poses)):
+    for i, (pcd, pos) in enumerate(zip(pcds, gripper_pose)):
         p, is_emp = crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num)
         processed_pcds.append(p)
         is_emptys.append(is_emp)
 
-    return np.stack(processed_pcds), np.array(is_emptys)
+    pcd = np.stack(processed_pcds)
+    is_emptys = np.array(is_emptys)
+    if is_batch:
+        pcd = pcd.reshape(n_envs, n_pcd, fix_point_num, dim)
+        is_emptys = is_emptys.reshape(n_envs, n_pcd)
+    return pcd, is_emptys
 
 def get_temporal_obs_and_goal_pcd(obs, goal):
     current_pcd = np.concatenate([obs, np.zeros((*obs.shape[:-1],) +(1,))], axis=-1)
