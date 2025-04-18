@@ -550,12 +550,18 @@ def populate_pcd_batch(pcds, point_num):
         processed_pcds.append(p)
     return np.stack(processed_pcds)
 
-def crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num=1024):
-    gripper_pos = pos
-    mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_m / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_m / 2))
-    mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_m / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_m / 2))
-    mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_m / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_m / 2))
-    mask = mask_x & mask_y & mask_z
+def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_method='sphere'):
+    if crop_method == 'sphere':
+        distances = np.linalg.norm(pcd[:, :3] - gripper_pos[:3], axis=1)
+        mask = distances <= bbox_size_m
+    elif crop_method == 'cube':
+        mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_m / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_m / 2))
+        mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_m / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_m / 2))
+        mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_m / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_m / 2))
+        mask = mask_x & mask_y & mask_z
+    else:
+        raise ValueError(f"Unknown crop method: {crop_method}")
+    
     if mask.sum() > 50:
         p = populate_point_num(pcd[mask], fix_point_num) 
         is_empty = False
