@@ -469,7 +469,7 @@ def pcd_to_voxel(pcds: np.ndarray, voxel_size: float = 0.01):
             indices = np.stack(list(vx.grid_index for vx in voxel))
             colors = np.stack(list(vx.color for vx in voxel))
 
-            mask = (indices > 0) * (indices < voxel_size)
+            mask = (indices > 0) * (indices < VOXEL_RESO)
             indices = indices[mask.all(axis=1)]
             colors = colors[mask.all(axis=1)]
 
@@ -477,8 +477,8 @@ def pcd_to_voxel(pcds: np.ndarray, voxel_size: float = 0.01):
             np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
             np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T
 
-            np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
-            np_voxels = np.flip(np_voxels, (1, 2))
+            # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
+            # np_voxels = np.flip(np_voxels, (1, 2))
         voxels.append(np_voxels)
     return np.stack(voxels)
 
@@ -553,7 +553,7 @@ def populate_pcd_batch(pcds, point_num):
 def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_method='sphere'):
     if crop_method == 'sphere':
         distances = np.linalg.norm(pcd[:, :3] - gripper_pos[:3], axis=1)
-        mask = distances <= bbox_size_m
+        mask = distances <= bbox_size_m / 2
     elif crop_method == 'cube':
         mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_m / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_m / 2))
         mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_m / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_m / 2))
