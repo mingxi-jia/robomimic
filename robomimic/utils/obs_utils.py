@@ -451,12 +451,20 @@ def populate_point_num(pcd, point_num):
         # pcd = pcd[indices]
     return pcd
 
-def pcd_to_voxel(pcds: np.ndarray, voxel_size: float = 0.01):
+def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float=None, voxel_size: float = 0.01):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
     assert (pcds[0, :,3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
     # pcd: (n, 6)
     voxels = []
-    voxel_bound = WORKSPACE.T
+    if gripper_crop is None:
+        voxel_bound = WORKSPACE.T
+    else:
+        voxel_bound = np.array([
+            [-gripper_crop, gripper_crop],
+            [-gripper_crop, gripper_crop],
+            [-gripper_crop, gripper_crop]
+        ]).T
+        
     for pcd in pcds:
         p = o3d.geometry.PointCloud()
         p.points = o3d.utility.Vector3dVector(pcd[:,:3])
@@ -534,10 +542,15 @@ def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz'):
         is_batch = True
         n_envs, n_pcd, num_points, dim = pcds.shape
         pcds = pcds.reshape(n_envs * n_pcd, num_points, dim)
+        repeat_poses = np.repeat(previous_eef_poses, n_pcd, axis=0)
+    else:
+        n_pcd, num_points, dim = pcds.shape
+        repeat_poses = np.repeat(previous_eef_poses[None], n_pcd, axis=0)
 
     assert pcds.shape[-1] == 6 and len(pcds.shape) == 3, f"PCD CONVERSION ERROR: pcd shape {pcds.shape} is incorrect"
 
-    pcds[...,:3] = transform_pcd_to_ee_frame(pcds[...,:3], previous_eef_poses[0], local_type)
+    for i in range(pcds.shape[0]):
+        pcds[i,:,:3] = transform_pcd_to_ee_frame(pcds[i,:,:3], repeat_poses[i], local_type)
     
     if is_batch:
         pcds = pcds.reshape(n_envs, n_pcd, num_points, dim)
@@ -550,7 +563,7 @@ def populate_pcd_batch(pcds, point_num):
         processed_pcds.append(p)
     return np.stack(processed_pcds)
 
-def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_method='sphere'):
+def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_method='cube'):
     if crop_method == 'sphere':
         distances = np.linalg.norm(pcd[:, :3] - gripper_pos[:3], axis=1)
         mask = distances <= bbox_size_m / 2
@@ -570,7 +583,7 @@ def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_metho
         is_empty = True
     return p, is_empty
 
-def crop_local_pcd_batch(pcds, gripper_pose, bbox_size_m=0.3, fix_point_num=1024):
+def crop_local_pcd_batch(pcds, gripper_pose, bbox_size_m=0.3, fix_point_num=1024, crop_method='cube'):
     """
     Clip depths to be centered at gripper x axis for a batch of raw RGBD images.
     
@@ -599,7 +612,7 @@ def crop_local_pcd_batch(pcds, gripper_pose, bbox_size_m=0.3, fix_point_num=1024
     processed_pcds = []
     is_emptys = []
     for i, (pcd, pos) in enumerate(zip(pcds, gripper_pose)):
-        p, is_emp = crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num)
+        p, is_emp = crop_local_pcd(pcd, pos, bbox_size_m, fix_point_num, crop_method=crop_method)
         processed_pcds.append(p)
         is_emptys.append(is_emp)
 
