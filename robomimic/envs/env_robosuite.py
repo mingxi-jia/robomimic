@@ -274,8 +274,8 @@ class EnvRobosuite(EB.EnvBase):
 
             all_pcds = o3d.geometry.PointCloud()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
-                if "eye_in_hand" in camera_name:
-                    continue
+                # if "eye_in_hand" in camera_name:
+                #     continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)
@@ -322,8 +322,8 @@ class EnvRobosuite(EB.EnvBase):
                 np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
                 np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T * 255
 
-            np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
-            np_voxels = np.flip(np_voxels, (1, 2))
+            # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
+            # np_voxels = np.flip(np_voxels, (1, 2))
 
             # import matplotlib.pyplot as plt
             # from mpl_toolkits.mplot3d import Axes3D
