@@ -90,7 +90,7 @@ def exclude_cameras_from_obs(traj, camera_names, store_voxel):
         for cam in camera_names:
             del traj['obs'][f"{cam}_image"]
             del traj['obs'][f"{cam}_depth"]
-            del traj['obs'][f"{cam}_rgbd"]
+            # del traj['obs'][f"{cam}_rgbd"]
 
 
 def visualize_voxel(traj):
@@ -309,6 +309,7 @@ def worker(x):
 
 def dataset_states_to_obs(args):
     store_voxel = args.store_voxel
+    multiview = args.multiview
     render = args.render
     if render:
         assert args.num_workers==1, "args.num_workers should be 1 if render"
@@ -323,7 +324,7 @@ def dataset_states_to_obs(args):
     assert main_camera in camera_names, "ERROR: You need to include main_camera in camera_names."
     # env_meta['env_kwargs']['main_camera'] = main_camera
     print(camera_names)
-    additional_camera_for_voxel = ['sideview2', 'backview'] if store_voxel else []
+    additional_camera_for_voxel = ['sideview2', 'backview'] if store_voxel or multiview else []
     camera_names = camera_names + additional_camera_for_voxel
 
     env = EnvUtils.create_env_for_data_processing(

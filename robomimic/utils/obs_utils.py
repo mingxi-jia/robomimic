@@ -451,11 +451,50 @@ def populate_point_num(pcd, point_num):
         # pcd = pcd[indices]
     return pcd
 
-def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float=None, voxel_size: float = 0.01):
+# def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float=None, voxel_size: float = 0.01):
+#     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
+#     assert (pcds[0, :,3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
+#     # pcd: (n, 6)
+#     voxels = []
+#     if gripper_crop is None:
+#         voxel_bound = WORKSPACE.T
+#     else:
+#         voxel_bound = np.array([
+#             [-gripper_crop, gripper_crop],
+#             [-gripper_crop, gripper_crop],
+#             [-gripper_crop, gripper_crop]
+#         ]).T
+        
+#     for pcd in pcds:
+#         p = o3d.geometry.PointCloud()
+#         p.points = o3d.utility.Vector3dVector(pcd[:,:3])
+#         p.colors = o3d.utility.Vector3dVector(pcd[:,3:6])
+#         voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(p, voxel_size=voxel_size, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
+#         voxel = voxel_grid.get_voxels()  # returns list of voxels
+#         if len(voxel) == 0:
+#             np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
+#         else:
+#             indices = np.stack(list(vx.grid_index for vx in voxel))
+#             colors = np.stack(list(vx.color for vx in voxel))
+
+#             mask = (indices > 0) * (indices < VOXEL_RESO)
+#             indices = indices[mask.all(axis=1)]
+#             colors = colors[mask.all(axis=1)]
+
+#             np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
+#             np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
+#             np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T
+
+#             # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
+#             # np_voxels = np.flip(np_voxels, (1, 2))
+#         voxels.append(np_voxels)
+#     return np.stack(voxels)
+
+def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float = 0.01):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
-    assert (pcds[0, :,3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
-    # pcd: (n, 6)
-    voxels = []
+    assert (pcds[0, :, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
+
+    # Define voxel bounds
     if gripper_crop is None:
         voxel_bound = WORKSPACE.T
     else:
@@ -464,31 +503,33 @@ def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float=None, voxel_size: float =
             [-gripper_crop, gripper_crop],
             [-gripper_crop, gripper_crop]
         ]).T
-        
-    for pcd in pcds:
-        p = o3d.geometry.PointCloud()
-        p.points = o3d.utility.Vector3dVector(pcd[:,:3])
-        p.colors = o3d.utility.Vector3dVector(pcd[:,3:6])
-        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(p, voxel_size=voxel_size, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
-        voxel = voxel_grid.get_voxels()  # returns list of voxels
-        if len(voxel) == 0:
-            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
-        else:
-            indices = np.stack(list(vx.grid_index for vx in voxel))
-            colors = np.stack(list(vx.color for vx in voxel))
 
-            mask = (indices > 0) * (indices < VOXEL_RESO)
-            indices = indices[mask.all(axis=1)]
-            colors = colors[mask.all(axis=1)]
+    # Precompute voxel grid dimensions
+    grid_min = voxel_bound[0]
+    grid_max = voxel_bound[1]
+    grid_size = ((grid_max - grid_min) / voxel_size).astype(int)
+    grid_size = np.clip(grid_size, 0, VOXEL_RESO)
 
-            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.float32)
-            np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
-            np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T
+    # Preallocate voxel array
+    batch_voxels = np.zeros((len(pcds), 4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO), dtype=np.float32)
 
-            # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
-            # np_voxels = np.flip(np_voxels, (1, 2))
-        voxels.append(np_voxels)
-    return np.stack(voxels)
+    for i, pcd in enumerate(pcds):
+        # Filter points within bounds
+        mask = np.all((pcd[:, :3] >= grid_min) & (pcd[:, :3] < grid_max), axis=1)
+        pcd = pcd[mask]
+
+        if len(pcd) == 0:
+            continue
+
+        # Compute voxel indices
+        indices = ((pcd[:, :3] - grid_min) / voxel_size).astype(int)
+        indices = np.clip(indices, 0, VOXEL_RESO - 1)
+
+        # Aggregate voxel occupancy and color
+        batch_voxels[i, 0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1  # Occupancy
+        batch_voxels[i, 1:, indices[:, 0], indices[:, 1], indices[:, 2]] = pcd[:, 3:6]  # Colors
+
+    return batch_voxels
 
 def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
     """
@@ -502,7 +543,7 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
     Returns:
         numpy.ndarray: An (N, 3) array of points expressed in the 'e' coordinate system.
     """
-    assert local_type in ['xyz', 'se3'] 
+    assert local_type in ['xyz', 'xyz_goal', 'se3'] 
     # Construct T_W_e mat
     T_W_e = np.eye(4)
     if local_type == 'se3':
@@ -518,11 +559,12 @@ def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
         # Convert back to Cartesian coordinates (drop the homogeneous coordinate)
         points_e = transformed_homogeneous[:, :3]
         return points_e
-    elif local_type == 'xyz':
+    elif 'xyz' in local_type:
         points_e = deepcopy(points_world)
         points_e = points_e - T_W_e_xyzqxyzw[:3]
         return points_e
-    
+    else:
+        raise ValueError(f"Unknown local_type: {local_type}. Expected 'xyz' or 'se3'.")
 
 def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz'):
     """
@@ -571,7 +613,9 @@ def crop_local_pcd(pcd, gripper_pos, bbox_size_m, fix_point_num=1024, crop_metho
         mask_x = (pcd[..., 0] > (gripper_pos[..., 0] - bbox_size_m / 2)) & (pcd[..., 0] < (gripper_pos[..., 0] + bbox_size_m / 2))
         mask_y = (pcd[..., 1] > (gripper_pos[..., 1] - bbox_size_m / 2)) & (pcd[..., 1] < (gripper_pos[..., 1] + bbox_size_m / 2))
         mask_z = (pcd[..., 2] > (gripper_pos[..., 2] - bbox_size_m / 2)) & (pcd[..., 2] < (gripper_pos[..., 2] + bbox_size_m / 2))
-        mask = mask_x & mask_y & mask_z
+        mask = mask_x & mask_y & mask_z 
+        # mask_table = (pcd[..., 2] > 0.815) 
+        # mask = mask & mask_table
     else:
         raise ValueError(f"Unknown crop method: {crop_method}")
     
