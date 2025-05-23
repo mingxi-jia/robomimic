@@ -491,7 +491,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--camera_names",
         type=str,
-        default='spaceview',
+        default='spaceview robot0_eye_in_hand',
         help="(optional) camera name(s) to use for image observations. Leave out to not use image observations.",
     )
 
