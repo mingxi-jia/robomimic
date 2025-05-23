@@ -349,7 +349,8 @@ class EnvRobosuite(EB.EnvBase):
 
             # ret['voxels'] = np_voxels
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
-            ret['pcd'] = o3d2np(all_pcds.farthest_point_down_sample(num_samples=4412)) 
+            ret['pcd'] = o3d2np(all_pcds, 4412) 
+            ret['spaceview_pcd'] = o3d2np(pcd_o3d, 4412) 
 
         if self._is_v1:
             for robot in self.env.robots:

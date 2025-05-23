@@ -1,9 +1,9 @@
 dataset_dir: /home/mingxi/data/mimicgen/raw_datasets/core
 output_dir: /home/mingxi/data/mimicgen/squashfs_datasets
-output_folder: pose_estimation
-dataset_file: pose_estimation.hdf5
+output_folder: coffee_d2
+dataset_file: coffee_d2.hdf5
 num_demos: 500
-num_workers: 1
+num_workers: 16
 env_xml_filename: table_arena.xml
 camera_obs_modality: separate
 done_mode: 2

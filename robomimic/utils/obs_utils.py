@@ -85,9 +85,13 @@ def np2o3d(pcd, color=None):
         pcd_o3d.colors = o3d.utility.Vector3dVector(color)
     return pcd_o3d
 
-def o3d2np(pcd_o3d):
+def o3d2np(pcd_o3d, num_samples=4412):
     # pcd: (n, 3)
     # color: (n, 3)
+    num_points = np.asarray(pcd_o3d.points).shape[0]
+    if num_points > num_samples:
+        pcd_o3d = pcd_o3d.farthest_point_down_sample(num_samples=num_samples)
+
     xyz = np.asarray(pcd_o3d.points)
     rgb = np.asarray(pcd_o3d.colors)
     pcd_np = np.concatenate([xyz, rgb], axis=1)
