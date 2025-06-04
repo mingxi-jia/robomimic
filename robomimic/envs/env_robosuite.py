@@ -35,8 +35,33 @@ from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, discret
                                        convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np)
 
 
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt # For displaying images in environments like Jupyter
 
 
+def enlarge_mask(binary_mask, kernel_size, iterations=1):
+    """
+    Enlarges a binary mask using morphological dilation.
+
+    Returns:
+        numpy.ndarray: The enlarged binary mask.
+    """
+
+    # --- Parameters for the Mask ---
+    image_height, image_width = binary_mask.shape
+    binary_mask = binary_mask.astype(np.uint8)
+
+    # 2. Define the structuring element (kernel) for dilation
+    # For a square kernel:
+    # kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
+    # For a circular kernel (often preferred for smoother enlargement):
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    # 3. Perform dilation
+    enlarged_mask = cv2.dilate(binary_mask, kernel, iterations=iterations)
+    return enlarged_mask.astype(bool)
 
 
 
@@ -94,6 +119,7 @@ class EnvRobosuite(EB.EnvBase):
             use_object_obs=True,
             use_camera_obs=use_image_obs,
             camera_depths=True,
+            camera_segmentations='instance',  # always use instance segmentation
         )
         kwargs.update(update_kwargs)
 
@@ -273,10 +299,11 @@ class EnvRobosuite(EB.EnvBase):
             voxel_size = 64
 
             all_pcds = o3d.geometry.PointCloud()
+            all_pcds_no_robot = o3d.geometry.PointCloud()
             all_pcds_dict = dict()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
-                if "eye_in_hand" in camera_name:
-                    continue
+                # if "eye_in_hand" in camera_name:
+                #     continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)
@@ -285,28 +312,36 @@ class EnvRobosuite(EB.EnvBase):
                 depth = get_real_depth_map(self.env.sim, depth)
                 depth = depth[:, :, 0]
                 color = di[f'{camera_name}_image'][::-1]
-                # depth = ret[f'{camera_name}_depth'][:, :, 0]
-                # color = ret[f'{camera_name}_image']
-                # if camera_name != 'agentview':
-                #     del ret[f'{camera_name}_depth']
-                #     del ret[f'{camera_name}_image']
+                
+                #----------- get raw pcd-----------------
                 cam_param = [int_mat[0, 0], int_mat[1, 1], int_mat[0, 2], int_mat[1, 2]]
                 mask = np.ones_like(depth, dtype=bool)
                 pcd = depth2fgpcd(depth, mask, cam_param)
-
                 # pose = np.linalg.inv(ext_mat)
                 pose = ext_mat
-                
                 # trans_pcd = pose @ np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
-
                 mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
-
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
-
                 all_pcds += pcd_o3d
                 all_pcds_dict[camera_name] = pcd_o3d
+
+                #----------- get raw pcd without robot-----------------
+                seg = di[f'{camera_name}_segmentation_instance'][::-1][...,-1]
+                robot = enlarge_mask(((seg == 3.0) | (seg == 5.0)), kernel_size=5)
+                
+                depth_no_robot = depth.copy()
+                depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
+                mask = np.ones_like(depth_no_robot, dtype=bool)
+                pcd = depth2fgpcd(depth_no_robot, mask, cam_param)
+                trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
+                trans_pcd = trans_pcd[:3, :].T
+                mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
+                pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
+                all_pcds_no_robot += pcd_o3d
+
+
 
             voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(all_pcds, voxel_size=WS_SIZE/voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
             voxels = voxel_grid.get_voxels()  # returns list of voxels
@@ -353,7 +388,7 @@ class EnvRobosuite(EB.EnvBase):
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
             ret['pcd'] = o3d2np(all_pcds, 4412) 
             ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
-            ret['pcd'] = o3d2np(all_pcds, 4412) 
+            ret['pcd_no_robot'] = o3d2np(all_pcds_no_robot, 4412) 
 
         if self._is_v1:
             for robot in self.env.robots:
