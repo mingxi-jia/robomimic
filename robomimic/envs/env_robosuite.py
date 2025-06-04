@@ -273,9 +273,10 @@ class EnvRobosuite(EB.EnvBase):
             voxel_size = 64
 
             all_pcds = o3d.geometry.PointCloud()
+            all_pcds_dict = dict()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
-                # if "eye_in_hand" in camera_name:
-                #     continue
+                if "eye_in_hand" in camera_name:
+                    continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)
@@ -305,6 +306,7 @@ class EnvRobosuite(EB.EnvBase):
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
 
                 all_pcds += pcd_o3d
+                all_pcds_dict[camera_name] = pcd_o3d
 
             voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(all_pcds, voxel_size=WS_SIZE/voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
             voxels = voxel_grid.get_voxels()  # returns list of voxels
@@ -350,7 +352,8 @@ class EnvRobosuite(EB.EnvBase):
             # ret['voxels'] = np_voxels
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
             ret['pcd'] = o3d2np(all_pcds, 4412) 
-            ret['spaceview_pcd'] = o3d2np(pcd_o3d, 2048) 
+            ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
+            ret['pcd'] = o3d2np(all_pcds, 4412) 
 
         if self._is_v1:
             for robot in self.env.robots:
