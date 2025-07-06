@@ -127,6 +127,7 @@ def extract_trajectory(
     actions,
     done_mode,
     store_voxel=True,
+    store_pcd=True,
     camera_height=84, 
     camera_width=84,
     render=False,
@@ -235,6 +236,16 @@ def extract_trajectory(
         except:
             pass
 
+    if not store_pcd:
+        obs_key = list(traj["obs"].keys())
+        for k in obs_key:
+            if "pcd" in k:
+                try:
+                    del traj["obs"][k]
+                    del traj["next_obs"][k]
+                except:
+                    pass
+
     # list to numpy array
     for k in traj:
         if k == "initial_state_dict":
@@ -290,7 +301,7 @@ def get_camera_info(
     return camera_info
 
 def worker(x):
-    env_meta, args, camera_names, initial_state, states, actions, store_voxel, render= x
+    env_meta, args, camera_names, initial_state, states, actions, store_voxel, store_pcd, render= x
     traj, camera_info = extract_trajectory(
         env_meta=env_meta,
         args=args,
@@ -299,6 +310,7 @@ def worker(x):
         states=states, 
         actions=actions,
         store_voxel = store_voxel,
+        store_pcd = store_pcd, 
         done_mode=args.done_mode,
         camera_height=args.camera_height, 
         camera_width=args.camera_width,
@@ -309,6 +321,7 @@ def worker(x):
 
 def dataset_states_to_obs(args):
     store_voxel = args.store_voxel
+    store_pcd = args.store_pcd
     multiview = args.multiview
     render = args.render
     if render:
@@ -356,6 +369,9 @@ def dataset_states_to_obs(args):
     inds = np.argsort([int(elem[5:]) for elem in demos])
     demos = [demos[i] for i in inds]
 
+    assert len(demos) > 0, "No demonstrations found in dataset {}".format(args.dataset)
+    assert len(demos) >= args.n, f"Number of demonstrations in dataset {args.dataset} ({len(demos)}) is less than n ({args.n})"
+
     # maybe reduce the number of demonstrations to playback
     if args.n is not None:
         demos = demos[:args.n]
@@ -390,7 +406,8 @@ def dataset_states_to_obs(args):
             actions_list.append(actions)
             
         with multiprocessing.Pool(num_workers) as pool:
-            output = pool.map(worker, [[env_meta, args, camera_names, initial_state_list[j], states_list[j], actions_list[j], store_voxel, render] for j in range(len(initial_state_list))]) 
+            output = pool.map(worker, [[env_meta, args, camera_names, initial_state_list[j], states_list[j], actions_list[j], store_voxel, store_pcd, render] for j in range(len(initial_state_list))]) 
+        # output = worker([env_meta, args, camera_names, initial_state_list[0], states_list[0], actions_list[0], store_voxel, render])
 
         for j, ind in enumerate(range(i, end)):
             ep = demos[ind]
@@ -582,6 +599,12 @@ if __name__ == "__main__":
         "--store_voxel", 
         action='store_true',
         help="(optional) save voxels in dataset",
+    )
+
+    parser.add_argument(
+        "--store_pcd", 
+        action='store_true',
+        help="(optional) save pcd in dataset",
     )
 
     args = parser.parse_args()
