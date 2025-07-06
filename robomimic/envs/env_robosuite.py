@@ -3,6 +3,7 @@ This file contains the robosuite environment wrapper that is used
 to provide a standardized environment API for training policies and interacting
 with metadata present in datasets.
 """
+import os
 import json
 import numpy as np
 from copy import deepcopy
@@ -142,6 +143,9 @@ class EnvRobosuite(EB.EnvBase):
         self.env = robosuite.make(self._env_name, **kwargs)
 
         
+        current_file_path = os.path.dirname(os.path.abspath(__file__))
+        self.SPACEVIEW_RGB_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_image_background.npy"))
+        self.SPACEVIEW_DEPTH_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_depth_background.npy"))
 
         if self._is_v1:
             # Make sure joint position observations and eef vel observations are active
@@ -264,8 +268,7 @@ class EnvRobosuite(EB.EnvBase):
                     ret[k] = ObsUtils.process_obs(obs=ret[k], obs_key=k)
                     # ret[k] = clip_depth(ret[k])
 
-        
-        
+
         # "object" key contains object information
         ret["object"] = np.array(di["object-state"])
         axis = 0 if self.postprocess_visual_obs else 2
@@ -330,9 +333,21 @@ class EnvRobosuite(EB.EnvBase):
                 #----------- get raw pcd without robot-----------------
                 seg = di[f'{camera_name}_segmentation_instance'][::-1][...,-1]
                 robot = enlarge_mask(((seg == 3.0) | (seg == 5.0)), kernel_size=5)
-                
+
                 depth_no_robot = depth.copy()
-                depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
+                rgb_no_robot = color.copy()
+                if "spaceview" in camera_name:
+                    #resize SPACEVIEW_RGB_BACKGROUND
+                    self.SPACEVIEW_RGB_BACKGROUND = cv2.resize(self.SPACEVIEW_RGB_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
+                    self.SPACEVIEW_DEPTH_BACKGROUND = cv2.resize(self.SPACEVIEW_DEPTH_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
+                    rgb_no_robot[robot] = self.SPACEVIEW_RGB_BACKGROUND[robot] 
+                    depth_no_robot[robot] = self.SPACEVIEW_DEPTH_BACKGROUND[robot] 
+                    ret['spaceview_image_no_robot'] = rgb_no_robot.copy()
+                    ret['spaceview_depth_no_robot'] = depth_no_robot[...,None].copy()
+                else:
+                    depth_no_robot = depth.copy()
+                    depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
+                
                 mask = np.ones_like(depth_no_robot, dtype=bool)
                 pcd = depth2fgpcd(depth_no_robot, mask, cam_param)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
@@ -384,11 +399,12 @@ class EnvRobosuite(EB.EnvBase):
             # plt.savefig('test2.png')
             # plt.close()
 
-            # ret['voxels'] = np_voxels
+            ret['voxels'] = np_voxels
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
             ret['pcd'] = o3d2np(all_pcds, 4412) 
             ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
             ret['pcd_no_robot'] = o3d2np(all_pcds_no_robot, 4412) 
+            
 
         if self._is_v1:
             for robot in self.env.robots:

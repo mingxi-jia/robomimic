@@ -58,6 +58,7 @@ DEPTH_MINMAX = {'birdview_depth': [1.180, 2.480],
                 'backview_depth': [0.6, 1.6],
                 'frontview_depth': [1.2, 2.2],
                 'spaceview_depth': [0.45, 1.45],
+                'spaceview_depth_no_robot': [0.45, 1.45],
                 'farspaceview_depth': [0.58, 1.58],
                 }
 WORKSPACE_MAX = {
@@ -520,25 +521,45 @@ def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float
     grid_size = ((grid_max - grid_min) / voxel_size).astype(int)
     grid_size = np.clip(grid_size, 0, VOXEL_RESO)
 
-    # Preallocate voxel array
-    batch_voxels = np.zeros((len(pcds), 4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO), dtype=np.float32)
+    # # Preallocate voxel array
+    # batch_voxels = np.zeros((len(pcds), 4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO), dtype=np.float32)
 
+    # for i, pcd in enumerate(pcds):
+    #     # Filter points within bounds
+    #     mask = np.all((pcd[:, :3] >= grid_min) & (pcd[:, :3] < grid_max), axis=1)
+    #     pcd = pcd[mask]
+
+    #     if len(pcd) == 0:
+    #         continue
+
+    #     # Compute voxel indices
+    #     indices = ((pcd[:, :3] - grid_min) / voxel_size).astype(int)
+    #     indices = np.clip(indices, 0, VOXEL_RESO - 1)
+
+    #     # Aggregate voxel occupancy and color
+    #     batch_voxels[i, 0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1  # Occupancy
+    #     batch_voxels[i, 1:, indices[:, 0], indices[:, 1], indices[:, 2]] = pcd[:, 3:6]  # Colors
+
+    batch_voxels= []
     for i, pcd in enumerate(pcds):
-        # Filter points within bounds
-        mask = np.all((pcd[:, :3] >= grid_min) & (pcd[:, :3] < grid_max), axis=1)
-        pcd = pcd[mask]
+        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(np2o3d(pcd[:,:3], pcd[:,3:]), voxel_size=WS_SIZE/VOXEL_RESO+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
+        voxels = voxel_grid.get_voxels()  # returns list of voxels
+        if len(voxels) == 0:
+            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.uint8)
+        else:
+            indices = np.stack(list(vx.grid_index for vx in voxels))
+            colors = np.stack(list(vx.color for vx in voxels))
 
-        if len(pcd) == 0:
-            continue
+            mask = (indices > 0) * (indices < VOXEL_RESO)
+            indices = indices[mask.all(axis=1)]
+            colors = colors[mask.all(axis=1)]
 
-        # Compute voxel indices
-        indices = ((pcd[:, :3] - grid_min) / voxel_size).astype(int)
-        indices = np.clip(indices, 0, VOXEL_RESO - 1)
-
-        # Aggregate voxel occupancy and color
-        batch_voxels[i, 0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1  # Occupancy
-        batch_voxels[i, 1:, indices[:, 0], indices[:, 1], indices[:, 2]] = pcd[:, 3:6]  # Colors
-
+            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.uint8)
+            np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
+            np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T * 255
+        
+        batch_voxels.append(np_voxels)
+    batch_voxels = np.stack(batch_voxels)
     return batch_voxels
 
 def transform_pcd_to_ee_frame(points_world, T_W_e_xyzqxyzw, local_type):
