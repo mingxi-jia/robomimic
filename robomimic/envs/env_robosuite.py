@@ -33,13 +33,90 @@ except ImportError:
 
 from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np)
+                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel)
 
 
 import cv2
+import copy
 import numpy as np
 import matplotlib.pyplot as plt # For displaying images in environments like Jupyter
+from scipy.spatial.transform import Rotation as R
 
+def apply_se3_pcd_transform(points, transform):
+    """
+    Apply SE3 transformation to a set of points.
+    points: a (N, 6) array where N is number of points and the last dimension is (x,y,z,r,g,b)
+    """
+    new_points = copy.deepcopy(points)
+    points_homogeneous = np.hstack([new_points[:, :3], np.ones((new_points.shape[0], 1))])
+    transformed_points = (transform @ points_homogeneous.T).T
+    new_points[:, :3] = transformed_points[:, :3]
+    return new_points
+
+def populate_point_num(pcd, point_num):
+    if pcd.shape[0] < point_num:
+        extra_choice = np.random.choice(pcd.shape[0], point_num-pcd.shape[0], replace=True)
+        pcd = np.concatenate([pcd, pcd[extra_choice]], axis=0)
+    else:
+        shuffle_idx = np.random.permutation(pcd.shape[0])[:point_num]
+        pcd = pcd[shuffle_idx]
+    return pcd
+
+num_points = 1024  # adjust the number of points as needed
+r = 0.05  # sphere radius, modify r if needed
+indices = np.arange(num_points, dtype=float) + 0.5
+phi = np.arccos(1 - 2 * indices / num_points)
+theta = np.pi * (1 + 5**0.5) * indices
+x = r * np.sin(phi) * np.cos(theta)
+y = r * np.sin(phi) * np.sin(theta)
+z = r * np.cos(phi)
+colors = np.zeros((num_points, 3), dtype=np.float32)
+mask1 = (x >= 0) & (y >= 0) & (z >= 0)
+mask2 = (x < 0) & (y >= 0) & (z >= 0)
+mask3 = (x < 0) & (y < 0) & (z >= 0)
+mask4 = (x >= 0) & (y < 0) & (z >= 0)
+mask5 = (x >= 0) & (y >= 0) & (z < 0)
+mask6 = (x < 0) & (y >= 0) & (z < 0)
+mask7 = (x < 0) & (y < 0) & (z < 0)
+mask8 = (x >= 0) & (y < 0) & (z < 0)
+
+colors[mask1] = [1.0, 0.0, 0.0]   # red      : (+x, +y, +z)
+colors[mask2] = [0.0, 1.0, 0.0]   # green    : (-x, +y, +z)
+colors[mask3] = [0.0, 0.0, 1.0]   # blue     : (-x, -y, +z)
+colors[mask4] = [1.0, 1.0, 0.0]   # yellow   : (+x, -y, +z)
+colors[mask5] = [1.0, 0.0, 1.0]   # magenta  : (+x, +y, -z)
+colors[mask6] = [0.0, 1.0, 1.0]   # cyan     : (-x, +y, -z)
+colors[mask7] = [0.5, 0.5, 0.5]   # grey     : (-x, -y, -z)
+colors[mask8] = [1.0, 0.5, 0.0]   # orange   : (+x, -y, -z)
+# colors = np.tile(np.array([0., 1., 0.]), (num_points, 1)) 
+# colors = np.where(y[:, None] < 0, np.array([0., 1., 0.]), np.array([0., 0., 1.]))
+SPHERE = np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
+
+def render_pcd_from_pose(ee_pose, fix_point_num=4412, model_type='sphere'):
+    """
+    Render the gripper point cloud at the given end effector pose.
+    ee_pose has a shpae of (N, 7) where 7 means (x, y, z, qx, qy, qz, qw)
+    is_add_noisy is used to add noise to the point cloud.
+    """
+    if model_type == 'sphere':
+        model_pcd = SPHERE
+    else:
+        raise NotImplementedError(f"model type {model_type} not implemented")
+
+    B = list(ee_pose.shape[:-1])
+        
+    ee_pose = ee_pose.reshape(-1, 7)
+    batch_size, ndim = ee_pose.shape
+    pcds = []
+    for i in range(batch_size):
+        gripper_pcd = copy.deepcopy(model_pcd)
+        tran_mat = np.eye(4)
+        tran_mat[:3, 3] = ee_pose[i, :3] 
+        tran_mat[:3, :3] = R.from_quat(ee_pose[i, 3:7]).as_matrix()
+        pcd = apply_se3_pcd_transform(gripper_pcd, tran_mat)
+        pcds.append(populate_point_num(pcd, fix_point_num))
+
+    return np.stack(pcds).reshape([*B, fix_point_num, -1])
 
 def enlarge_mask(binary_mask, kernel_size, iterations=1):
     """
@@ -357,49 +434,19 @@ class EnvRobosuite(EB.EnvBase):
                 all_pcds_no_robot += pcd_o3d
 
 
+            np_voxels = pcd_to_voxel(o3d2np(pcd_o3d)[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
 
-            voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(all_pcds, voxel_size=WS_SIZE/voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
-            voxels = voxel_grid.get_voxels()  # returns list of voxels
-            if len(voxels) == 0:
-                np_voxels = np.zeros([4, voxel_size, voxel_size, voxel_size], dtype=np.uint8)
-            else:
-                indices = np.stack(list(vx.grid_index for vx in voxels))
-                colors = np.stack(list(vx.color for vx in voxels))
-
-                mask = (indices > 0) * (indices < voxel_size)
-                indices = indices[mask.all(axis=1)]
-                colors = colors[mask.all(axis=1)]
-
-                np_voxels = np.zeros([4, voxel_size, voxel_size, voxel_size], dtype=np.uint8)
-                np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
-                np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T * 255
-
+            np_pcd_no_robot = o3d2np(all_pcds_no_robot)
+            eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
+            geco = render_pcd_from_pose(eef_pos, 1024, 'sphere')
+            pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
+            np_voxels_render = pcd_to_voxel(pcd_render[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
             # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
             # np_voxels = np.flip(np_voxels, (1, 2))
 
-            # import matplotlib.pyplot as plt
-            # from mpl_toolkits.mplot3d import Axes3D
-
-            # # Create a 3D plot
-            # fig = plt.figure()
-            # ax = fig.add_subplot(111, projection='3d')
-            
-            # # indices = np.argwhere(np_voxels[0] != 0)
-            # # colors = np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]].T
-
-            # ax.scatter(indices[:, 0], indices[:, 1], indices[:, 2], color=colors, marker='s')
-
-            # # Set labels and show the plot
-            # ax.set_xlabel('X Axis')
-            # ax.set_ylabel('Y Axis')
-            # ax.set_zlabel('Z Axis')
-            # ax.set_xlim(0, 64)
-            # ax.set_ylim(0, 64)
-            # ax.set_zlim(0, 64)
-            # plt.savefig('test2.png')
-            # plt.close()
 
             ret['voxels'] = np_voxels
+            ret['voxels_render'] = np_voxels_render
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
             ret['pcd'] = o3d2np(all_pcds, 4412) 
             ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
