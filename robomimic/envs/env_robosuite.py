@@ -31,9 +31,9 @@ try:
 except ImportError:
     MUJOCO_EXCEPTIONS = []
 
-from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
+from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, BBOX_SIZE_M, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel)
+                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, crop_local_pcd_batch)
 
 
 import cv2
@@ -41,6 +41,30 @@ import copy
 import numpy as np
 import matplotlib.pyplot as plt # For displaying images in environments like Jupyter
 from scipy.spatial.transform import Rotation as R
+
+def visualize_voxel(np_voxels):
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+
+    voxel_reso = np_voxels.shape[-1]
+
+    # Create a 3D plot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    
+    indices = np.argwhere(np_voxels[0] != 0)
+    colors = np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]].T
+
+    ax.scatter(indices[:, 0], indices[:, 1], indices[:, 2], color=colors/255., marker='s')
+
+    # Set labels and show the plot
+    ax.set_xlabel('X Axis')
+    ax.set_ylabel('Y Axis')
+    ax.set_zlabel('Z Axis')
+    ax.set_xlim(0, voxel_reso)
+    ax.set_ylim(0, voxel_reso)
+    ax.set_zlim(0, voxel_reso)
+    plt.show(block=False)
 
 def apply_se3_pcd_transform(points, transform):
     """
@@ -433,8 +457,8 @@ class EnvRobosuite(EB.EnvBase):
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
                 all_pcds_no_robot += pcd_o3d
 
-
-            np_voxels = pcd_to_voxel(o3d2np(pcd_o3d)[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
+            np_pcd = o3d2np(all_pcds)
+            np_voxels = pcd_to_voxel(np_pcd[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
 
             np_pcd_no_robot = o3d2np(all_pcds_no_robot)
             eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
@@ -444,8 +468,13 @@ class EnvRobosuite(EB.EnvBase):
             # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
             # np_voxels = np.flip(np_voxels, (1, 2))
 
+            local_pcd, is_emptys = crop_local_pcd_batch(np_pcd[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
+            local_pcd = localize_pcd_batch(local_pcd, eef_pos, local_type='xyz')
+            local_voxel = pcd_to_voxel(local_pcd, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/32)
+            # visualize_voxel(local_voxel[0])
 
             ret['voxels'] = np_voxels
+            ret['local_voxels'] = local_voxel
             ret['voxels_render'] = np_voxels_render
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
             ret['pcd'] = o3d2np(all_pcds, 4412) 
