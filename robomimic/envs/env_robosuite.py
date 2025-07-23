@@ -458,19 +458,19 @@ class EnvRobosuite(EB.EnvBase):
                 all_pcds_no_robot += pcd_o3d
 
             np_pcd = o3d2np(all_pcds)
-            np_voxels = pcd_to_voxel(np_pcd[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
+            np_voxels = pcd_to_voxel(np_pcd[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
 
             np_pcd_no_robot = o3d2np(all_pcds_no_robot)
             eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
             geco = render_pcd_from_pose(eef_pos, 1024, 'sphere')
             pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
-            np_voxels_render = pcd_to_voxel(pcd_render[None,...], None, voxel_size=WS_SIZE/voxel_size+1e-4)[0]
+            np_voxels_render = pcd_to_voxel(pcd_render[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
             # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
             # np_voxels = np.flip(np_voxels, (1, 2))
 
             local_pcd, is_emptys = crop_local_pcd_batch(np_pcd[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
             local_pcd = localize_pcd_batch(local_pcd, eef_pos, local_type='xyz')
-            local_voxel = pcd_to_voxel(local_pcd, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/32)
+            local_voxel = pcd_to_voxel(local_pcd, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/32)[0]
             # visualize_voxel(local_voxel[0])
 
             ret['voxels'] = np_voxels
