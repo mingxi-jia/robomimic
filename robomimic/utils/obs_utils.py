@@ -68,6 +68,7 @@ WORKSPACE_MAX = {
 center = np.array([0, 0, 0.7])
 WS_SIZE = 0.6
 VOXEL_RESO = 64
+BBOX_SIZE_M = 0.3
 WORKSPACE = np.array([
     [center[0] - WS_SIZE/2, center[0] + WS_SIZE/2],
     [center[1] - WS_SIZE/2, center[1] + WS_SIZE/2],
@@ -519,6 +520,7 @@ def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float
     grid_min = voxel_bound[0]
     grid_max = voxel_bound[1]
     grid_size = ((grid_max - grid_min) / voxel_size).astype(int)
+    voxel_reso = grid_size[0]
     grid_size = np.clip(grid_size, 0, VOXEL_RESO)
 
     # # Preallocate voxel array
@@ -542,19 +544,19 @@ def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float
 
     batch_voxels= []
     for i, pcd in enumerate(pcds):
-        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(np2o3d(pcd[:,:3], pcd[:,3:]), voxel_size=WS_SIZE/VOXEL_RESO+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
+        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud_within_bounds(np2o3d(pcd[:,:3], pcd[:,3:]), voxel_size=voxel_size+1e-4, min_bound=voxel_bound[0], max_bound=voxel_bound[1])
         voxels = voxel_grid.get_voxels()  # returns list of voxels
         if len(voxels) == 0:
-            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.uint8)
+            np_voxels = np.zeros([4, voxel_reso, voxel_reso, voxel_reso], dtype=np.uint8)
         else:
             indices = np.stack(list(vx.grid_index for vx in voxels))
             colors = np.stack(list(vx.color for vx in voxels))
 
-            mask = (indices > 0) * (indices < VOXEL_RESO)
+            mask = (indices > 0) * (indices < voxel_reso)
             indices = indices[mask.all(axis=1)]
             colors = colors[mask.all(axis=1)]
 
-            np_voxels = np.zeros([4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO], dtype=np.uint8)
+            np_voxels = np.zeros([4, voxel_reso, voxel_reso, voxel_reso], dtype=np.uint8)
             np_voxels[0, indices[:, 0], indices[:, 1], indices[:, 2]] = 1
             np_voxels[1:, indices[:, 0], indices[:, 1], indices[:, 2]] = colors.T * 255
         
