@@ -31,9 +31,11 @@ try:
 except ImportError:
     MUJOCO_EXCEPTIONS = []
 
-from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, BBOX_SIZE_M, discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
+from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, BBOX_SIZE_M, CLIPSPACE, VOXEL_RESO, LOCAL_VOXEL_RESO,
+                                       discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, crop_local_pcd_batch)
+                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, 
+                                       crop_local_pcd_batch, preprocess_pcd, voxel_to_rgbd, enlarge_mask)
 
 
 import cv2
@@ -66,6 +68,23 @@ def visualize_voxel(np_voxels):
     ax.set_zlim(0, voxel_reso)
     plt.show(block=False)
 
+def visualize_pcds(points: list, mode='color'):
+    assert mode in ['color', 'xyz'], "Mode must be 'color' or 'xyz'"
+    
+    pcds = []
+    for p in points:
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(p[:,:3])
+    
+        if mode == 'color':
+            assert p.shape[1] >= 6
+            pcd.colors = o3d.utility.Vector3dVector(p[:,3:6])
+        
+        pcds.append(pcd)
+    
+    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([*pcds, origin])
+
 def apply_se3_pcd_transform(points, transform):
     """
     Apply SE3 transformation to a set of points.
@@ -86,54 +105,103 @@ def populate_point_num(pcd, point_num):
         pcd = pcd[shuffle_idx]
     return pcd
 
-num_points = 1024  # adjust the number of points as needed
-r = 0.05  # sphere radius, modify r if needed
-indices = np.arange(num_points, dtype=float) + 0.5
-phi = np.arccos(1 - 2 * indices / num_points)
-theta = np.pi * (1 + 5**0.5) * indices
-x = r * np.sin(phi) * np.cos(theta)
-y = r * np.sin(phi) * np.sin(theta)
-z = r * np.cos(phi)
-colors = np.zeros((num_points, 3), dtype=np.float32)
-mask1 = (x >= 0) & (y >= 0) & (z >= 0)
-mask2 = (x < 0) & (y >= 0) & (z >= 0)
-mask3 = (x < 0) & (y < 0) & (z >= 0)
-mask4 = (x >= 0) & (y < 0) & (z >= 0)
-mask5 = (x >= 0) & (y >= 0) & (z < 0)
-mask6 = (x < 0) & (y >= 0) & (z < 0)
-mask7 = (x < 0) & (y < 0) & (z < 0)
-mask8 = (x >= 0) & (y < 0) & (z < 0)
+def generate_sphere_pcd():
+    num_points = 896  # adjust the number of points as needed
+    r = 0.05  # sphere radius, modify r if needed
+    indices = np.arange(num_points, dtype=float) + 0.5
+    phi = np.arccos(1 - 2 * indices / num_points)
+    theta = np.pi * (1 + 5**0.5) * indices
+    x = r * np.sin(phi) * np.cos(theta)
+    y = r * np.sin(phi) * np.sin(theta)
+    z = r * np.cos(phi)
+    colors = np.zeros((num_points, 3), dtype=np.float32)
+    mask1 = (x >= 0) & (y >= 0) & (z >= 0)
+    mask2 = (x < 0) & (y >= 0) & (z >= 0)
+    mask3 = (x < 0) & (y < 0) & (z >= 0)
+    mask4 = (x >= 0) & (y < 0) & (z >= 0)
+    mask5 = (x >= 0) & (y >= 0) & (z < 0)
+    mask6 = (x < 0) & (y >= 0) & (z < 0)
+    mask7 = (x < 0) & (y < 0) & (z < 0)
+    mask8 = (x >= 0) & (y < 0) & (z < 0)
 
-colors[mask1] = [1.0, 0.0, 0.0]   # red      : (+x, +y, +z)
-colors[mask2] = [0.0, 1.0, 0.0]   # green    : (-x, +y, +z)
-colors[mask3] = [0.0, 0.0, 1.0]   # blue     : (-x, -y, +z)
-colors[mask4] = [1.0, 1.0, 0.0]   # yellow   : (+x, -y, +z)
-colors[mask5] = [1.0, 0.0, 1.0]   # magenta  : (+x, +y, -z)
-colors[mask6] = [0.0, 1.0, 1.0]   # cyan     : (-x, +y, -z)
-colors[mask7] = [0.5, 0.5, 0.5]   # grey     : (-x, -y, -z)
-colors[mask8] = [1.0, 0.5, 0.0]   # orange   : (+x, -y, -z)
-# colors = np.tile(np.array([0., 1., 0.]), (num_points, 1)) 
-# colors = np.where(y[:, None] < 0, np.array([0., 1., 0.]), np.array([0., 0., 1.]))
-SPHERE = np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
+    colors[mask1] = [1.0, 0.0, 0.0]   # red      : (+x, +y, +z)
+    colors[mask2] = [0.0, 1.0, 0.0]   # green    : (-x, +y, +z)
+    colors[mask3] = [0.0, 0.0, 1.0]   # blue     : (-x, -y, +z)
+    colors[mask4] = [1.0, 1.0, 0.0]   # yellow   : (+x, -y, +z)
+    colors[mask5] = [1.0, 0.0, 1.0]   # magenta  : (+x, +y, -z)
+    colors[mask6] = [0.0, 1.0, 1.0]   # cyan     : (-x, +y, -z)
+    colors[mask7] = [0.5, 0.5, 0.5]   # grey     : (-x, -y, -z)
+    colors[mask8] = [1.0, 0.5, 0.0]   # orange   : (+x, -y, -z)
+    # colors = np.tile(np.array([0., 1., 0.]), (num_points, 1)) 
+    # colors = np.where(y[:, None] < 0, np.array([0., 1., 0.]), np.array([0., 0., 1.]))
+    return np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
 
-def render_pcd_from_pose(ee_pose, fix_point_num=4412, model_type='sphere'):
+# def generate_sphere_pcd():
+#     # the sphere is all black except the two sides are black
+#     num_points = 896
+#     r = 0.05  # sphere radius
+#     indices = np.arange(num_points, dtype=float) + 0.5
+#     phi = np.arccos(1 - 2 * indices / num_points)
+#     theta = np.pi * (1 + 5**0.5) * indices
+
+#     x = r * np.sin(phi) * np.cos(theta)
+#     y = r * np.sin(phi) * np.sin(theta)
+#     z = r * np.cos(phi)
+
+#     # start with all points gray
+#     colors = np.ones((num_points, 3), dtype=np.float32) * 0.5  # gray color
+
+#     # Mark two "sides" (points near the extreme left and right) as black.
+#     # Here, we set points with |x| greater than 90% of the radius to black.
+#     side_thresh = r * 0.8
+#     mask = np.abs(x) >= side_thresh
+#     colors[mask] = [0.0, 1.0, 0.0]
+    
+#     mask = z <= -side_thresh
+#     colors[mask] = [1.0, 0.0, 0.0]
+
+#     return np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
+
+SPHERE = generate_sphere_pcd()
+
+def get_gripper_pcd(is_grasp, is_pose_sphere=True):
+    # make a sphere r=0.01. It turns black when the gripper is closed else white
+    # is_grasp: bool, if True, return a sphere pcd with color black, else return a sphere pcd with color gray
+    num_points = 128
+    r = 0.01  # sphere radius, modify r if needed
+    indices = np.arange(num_points, dtype=float) + 0.5
+    phi = np.arccos(1 - 2 * indices / num_points)
+    theta = np.pi * (1 + 5**0.5) * indices
+    x = r * np.sin(phi) * np.cos(theta)
+    y = r * np.sin(phi) * np.sin(theta)
+    z = r * np.cos(phi)
+    colors = np.zeros((num_points, 3), dtype=np.float32) if is_grasp else np.ones((num_points, 3), dtype=np.float32) * 0.5
+    SPHERE_GRIP = np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
+    sphere = copy.deepcopy(SPHERE)
+    if is_pose_sphere:
+        return np.concatenate([sphere, SPHERE_GRIP], axis=0)
+    else:
+        return SPHERE_GRIP
+
+def render_pcd_from_pose(ee_pose, gripper_qpos, fix_point_num=4412, model_type='sphere'):
     """
     Render the gripper point cloud at the given end effector pose.
     ee_pose has a shpae of (N, 7) where 7 means (x, y, z, qx, qy, qz, qw)
     is_add_noisy is used to add noise to the point cloud.
     """
-    if model_type == 'sphere':
-        model_pcd = SPHERE
-    else:
+    assert gripper_qpos.shape[-1] == 2, "gripper_qpos should have a shape of (N, 2)"
+    if model_type not in ['sphere', 'grip_sphere']:
         raise NotImplementedError(f"model type {model_type} not implemented")
 
     B = list(ee_pose.shape[:-1])
         
     ee_pose = ee_pose.reshape(-1, 7)
+    gripper_qpos = gripper_qpos.reshape(-1, 2)
     batch_size, ndim = ee_pose.shape
     pcds = []
     for i in range(batch_size):
-        gripper_pcd = copy.deepcopy(model_pcd)
+        is_grasp = (np.abs(gripper_qpos[i]) < 0.021).any()
+        gripper_pcd = get_gripper_pcd(is_grasp, is_pose_sphere=(model_type == 'sphere'))
         tran_mat = np.eye(4)
         tran_mat[:3, 3] = ee_pose[i, :3] 
         tran_mat[:3, :3] = R.from_quat(ee_pose[i, 3:7]).as_matrix()
@@ -142,28 +210,7 @@ def render_pcd_from_pose(ee_pose, fix_point_num=4412, model_type='sphere'):
 
     return np.stack(pcds).reshape([*B, fix_point_num, -1])
 
-def enlarge_mask(binary_mask, kernel_size, iterations=1):
-    """
-    Enlarges a binary mask using morphological dilation.
 
-    Returns:
-        numpy.ndarray: The enlarged binary mask.
-    """
-
-    # --- Parameters for the Mask ---
-    image_height, image_width = binary_mask.shape
-    binary_mask = binary_mask.astype(np.uint8)
-
-    # 2. Define the structuring element (kernel) for dilation
-    # For a square kernel:
-    # kernel = np.ones((kernel_size, kernel_size), np.uint8)
-
-    # For a circular kernel (often preferred for smoother enlargement):
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-    # 3. Perform dilation
-    enlarged_mask = cv2.dilate(binary_mask, kernel, iterations=iterations)
-    return enlarged_mask.astype(bool)
 
 
 
@@ -400,14 +447,12 @@ class EnvRobosuite(EB.EnvBase):
             #     [center[0] + ws_size/2, center[1] + ws_size/2, center[2] - 0.05 + ws_size],
             # ])
             voxel_bound = WORKSPACE.T
-            voxel_size = 64
+            voxel_size = VOXEL_RESO
 
             all_pcds = o3d.geometry.PointCloud()
             all_pcds_no_robot = o3d.geometry.PointCloud()
-            all_pcds_dict = dict()
+            all_rgb_no_robot_dict = dict()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
-                # if "eye_in_hand" in camera_name:
-                #     continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)
@@ -426,60 +471,77 @@ class EnvRobosuite(EB.EnvBase):
                 # trans_pcd = pose @ np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
-                mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
+                mask = (trans_pcd[:, 0] > CLIPSPACE[0, 0]) * (trans_pcd[:, 0] < CLIPSPACE[0, 1]) * (trans_pcd[:, 1] > CLIPSPACE[1, 0]) * (trans_pcd[:, 1] < CLIPSPACE[1, 1]) * (trans_pcd[:, 2] > CLIPSPACE[2, 0]) * (trans_pcd[:, 2] < CLIPSPACE[2, 1])
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
-                all_pcds += pcd_o3d
-                all_pcds_dict[camera_name] = pcd_o3d
+                if "eye_in_hand" not in camera_name:
+                    all_pcds += pcd_o3d
 
                 #----------- get raw pcd without robot-----------------
                 seg = di[f'{camera_name}_segmentation_instance'][::-1][...,-1]
-                robot = enlarge_mask(((seg == 3.0) | (seg == 5.0)), kernel_size=5)
+                robot_id = [seg.max(), seg.max()-1, seg.max()-2]  # robot is always the last 3 ids
+                robot = enlarge_mask(((seg == robot_id[0]) | (seg == robot_id[1]) | (seg == robot_id[2])), kernel_size=5)
 
                 depth_no_robot = depth.copy()
                 rgb_no_robot = color.copy()
-                if "spaceview" in camera_name:
-                    #resize SPACEVIEW_RGB_BACKGROUND
-                    self.SPACEVIEW_RGB_BACKGROUND = cv2.resize(self.SPACEVIEW_RGB_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
-                    self.SPACEVIEW_DEPTH_BACKGROUND = cv2.resize(self.SPACEVIEW_DEPTH_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
-                    rgb_no_robot[robot] = self.SPACEVIEW_RGB_BACKGROUND[robot] 
-                    depth_no_robot[robot] = self.SPACEVIEW_DEPTH_BACKGROUND[robot] 
-                    ret['spaceview_image_no_robot'] = rgb_no_robot.copy()
-                    ret['spaceview_depth_no_robot'] = depth_no_robot[...,None].copy()
-                else:
-                    depth_no_robot = depth.copy()
-                    depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
-                
+                rgb_no_robot[64:] = 255
+                all_rgb_no_robot_dict[camera_name] = rgb_no_robot
+                # if "spaceview" in camera_name:
+                #     #resize SPACEVIEW_RGB_BACKGROUND
+                #     self.SPACEVIEW_RGB_BACKGROUND = cv2.resize(self.SPACEVIEW_RGB_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
+                #     self.SPACEVIEW_DEPTH_BACKGROUND = cv2.resize(self.SPACEVIEW_DEPTH_BACKGROUND, (cam_width, cam_height), interpolation=cv2.INTER_LINEAR)
+                #     rgb_no_robot[robot] = self.SPACEVIEW_RGB_BACKGROUND[robot] 
+                #     depth_no_robot[robot] = self.SPACEVIEW_DEPTH_BACKGROUND[robot] 
+                #     ret['spaceview_image_no_robot'] = rgb_no_robot.copy()
+                #     ret['spaceview_depth_no_robot'] = depth_no_robot[...,None].copy()
+                # else:
+                #     depth_no_robot = depth.copy()
+                #     depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
+
+                depth_no_robot = depth.copy()
+                depth_no_robot[robot] = 5.0  # set robot pixels to a far distance
+
                 mask = np.ones_like(depth_no_robot, dtype=bool)
                 pcd = depth2fgpcd(depth_no_robot, mask, cam_param)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
                 mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
-                all_pcds_no_robot += pcd_o3d
+                if "eye_in_hand" not in camera_name:
+                    all_pcds_no_robot += pcd_o3d
 
             np_pcd = o3d2np(all_pcds)
             np_voxels = pcd_to_voxel(np_pcd[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
 
             np_pcd_no_robot = o3d2np(all_pcds_no_robot)
             eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
-            geco = render_pcd_from_pose(eef_pos, 1024, 'sphere')
+            geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'sphere')
             pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
             np_voxels_render = pcd_to_voxel(pcd_render[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
             # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
             # np_voxels = np.flip(np_voxels, (1, 2))
 
-            local_pcd, is_emptys = crop_local_pcd_batch(np_pcd[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
-            local_pcd = localize_pcd_batch(local_pcd, eef_pos, local_type='xyz')
-            local_voxel = pcd_to_voxel(local_pcd, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/32)[0]
+            local_pcds = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')
+            # local_pcd, is_emptys = crop_local_pcd_batch(np_pcd[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
+            local_voxel = pcd_to_voxel(local_pcds, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/LOCAL_VOXEL_RESO)[0]
             # visualize_voxel(local_voxel[0])
+
+            # local_pcd_render, is_emptys = crop_local_pcd_batch(pcd_render[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
+            geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'grip_sphere')
+            np_pcd_no_robot = preprocess_pcd(np_pcd_no_robot)
+            pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
+            local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')
+            local_voxel_render = pcd_to_voxel(local_pcd_renders, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/LOCAL_VOXEL_RESO)[0]
 
             ret['voxels'] = np_voxels
             ret['local_voxels'] = local_voxel
-            ret['voxels_render'] = np_voxels_render
+            ret['render_voxels'] = np_voxels_render
+            ret['local_render_voxel'] = local_voxel_render
+            ret['local_render_image'] = all_rgb_no_robot_dict['robot0_eye_in_hand']
+            # voxel_to_rgbd(local_voxel_render)
             # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
-            ret['pcd'] = o3d2np(all_pcds, 4412) 
-            ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
-            ret['pcd_no_robot'] = o3d2np(all_pcds_no_robot, 4412) 
+            # ret['pcd'] = o3d2np(all_pcds, 4412) 
+            # ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
+            # ret['pcd_no_robot'] = o3d2np(all_pcds_no_robot, 4412) 
             
 
         if self._is_v1:

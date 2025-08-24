@@ -232,6 +232,7 @@ def extract_trajectory(
     if not store_voxel:
         try:
             del traj["obs"]['voxels']
+            del traj["obs"]['local_voxels']
             del traj["next_obs"]['voxels']
         except:
             pass
@@ -407,7 +408,7 @@ def dataset_states_to_obs(args):
             
         with multiprocessing.Pool(num_workers) as pool:
             output = pool.map(worker, [[env_meta, args, camera_names, initial_state_list[j], states_list[j], actions_list[j], store_voxel, store_pcd, render] for j in range(len(initial_state_list))]) 
-        # output = worker([env_meta, args, camera_names, initial_state_list[0], states_list[0], actions_list[0], store_voxel, render])
+        # output = worker([env_meta, args, camera_names, initial_state_list[0], states_list[0], actions_list[0], store_voxel, store_pcd, render])
 
         for j, ind in enumerate(range(i, end)):
             ep = demos[ind]

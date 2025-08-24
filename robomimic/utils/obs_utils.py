@@ -8,6 +8,7 @@ from collections import OrderedDict
 from scipy.spatial.transform import Rotation
 import re
 import open3d as o3d
+import cv2
 
 import torch
 import torch.nn.functional as F
@@ -68,12 +69,135 @@ WORKSPACE_MAX = {
 center = np.array([0, 0, 0.7])
 WS_SIZE = 0.6
 VOXEL_RESO = 64
-BBOX_SIZE_M = 0.3
+LOCAL_VOXEL_RESO = 64
+BBOX_SIZE_M = 0.4
 WORKSPACE = np.array([
     [center[0] - WS_SIZE/2, center[0] + WS_SIZE/2],
     [center[1] - WS_SIZE/2, center[1] + WS_SIZE/2],
     [center[2], center[2] + WS_SIZE]
 ])
+# this is for roughly cropping the point cloud
+# we need this because we want inhand voxel to access larger workspace
+CLIP_SIZE = 1.0
+CLIPSPACE = np.array([
+    [center[0] - CLIP_SIZE/2, center[0] + CLIP_SIZE/2],
+    [center[1] - CLIP_SIZE/2, center[1] + CLIP_SIZE/2],
+    [center[2], center[2] + CLIP_SIZE]
+])
+
+def enlarge_mask(binary_mask, kernel_size, iterations=1):
+    """
+    Enlarges a binary mask using morphological dilation.
+
+    Returns:
+        numpy.ndarray: The enlarged binary mask.
+    """
+
+    # --- Parameters for the Mask ---
+    image_height, image_width = binary_mask.shape
+    binary_mask = binary_mask.astype(np.uint8)
+
+    # 2. Define the structuring element (kernel) for dilation
+    # For a square kernel:
+    # kernel = np.ones((kernel_size, kernel_size), np.uint8)
+
+    # For a circular kernel (often preferred for smoother enlargement):
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    # 3. Perform dilation
+    enlarged_mask = cv2.dilate(binary_mask, kernel, iterations=iterations)
+    return enlarged_mask.astype(bool)
+
+def voxel_to_rgbd(
+    vox: np.ndarray,
+    front_is_z0: bool = False,   
+) -> np.ndarray:
+    """
+    Compress a (4, H, W, D) voxel grid (occupancy, R, G, B) into a (4, H, W) RGB-D image.
+    The first three channels are the RGB composite and the fourth is the depth.
+    Linear interpolation is applied along depth, where the depth value is computed as
+    the weighted average of depth layer indices.
+    
+    Args:
+        vox: np.ndarray of shape (4, H, W, D), channels=(occupancy, R, G, B).
+             Occupancy is interpreted as per-voxel opacity in [0,1] (will be clipped).
+        method:
+            - "alpha": front-to-back alpha compositing with occupancy as alpha.
+                       Equivalent to rendering onto a black background.
+            - "occ_mean": occupancy-weighted average of RGB along depth.
+            - "occ_argmax": take RGB at the depth with max occupancy.
+        front_is_z0: if True, depth index 0 corresponds to the front; otherwise, reverse.
+        normalize_by_coverage (alpha only): if True, divides by the sum of weights so that
+            colors are not darkened when total occupancy is small.
+        eps: small constant to avoid division by zero.
+    
+    Returns:
+        (4, H, W) float32 RGB-D image, where the first three channels are RGB and the fourth channel
+        is the interpolated depth value (in voxel-layer index space).
+    """
+    if vox.ndim != 4 or vox.shape[0] != 4:
+        raise ValueError("Expected input of shape (4, H, W, D).")
+    
+    _, H, W, D = vox.shape
+    occ = np.clip(vox[0], 0.0, 1.0)           # (H, W, D)
+    rgb = vox[1:4].astype(np.uint8)         # (3, H, W, D)
+    rgb[:,occ == 0] = 255
+    
+    # If the front is not at index 0, reverse the depth order
+    if not front_is_z0:
+        occ = occ[..., ::-1]
+        rgb = rgb[..., ::-1]
+    
+    # Initialize accumulators before processing depth layers
+    composite_rgb = np.ones((H, W, 3), dtype=np.uint8)*255
+    composite_depth = np.ones((H, W), dtype=np.uint8)*255
+
+    # Loop over each depth layer to composite color and interpolate depth
+    for d in range(D):
+        # Get the per-pixel occupancy for the current depth layer
+        curr_occ = occ[..., d].astype(np.uint8)
+        curr_occ_large = enlarge_mask((curr_occ==1), kernel_size=7)
+        # Move the RGB slice from (3,H,W) to (H,W,3) for proper broadcast
+        curr_rgb = np.moveaxis(rgb[..., d], 0, -1)
+        # interpolate the non-occupied pixels in rgb_d
+        # Inpaint the image using the mask.
+        # cv2.INPAINT_NS (Navier-Stokes) or cv2.INPAINT_TELEA (Fast Marching Method) are options.
+        if d < 220:
+            inpaint_mask = curr_occ_large.astype(np.uint8)*255-curr_occ.astype(np.uint8)*255
+            curr_rgb = cv2.inpaint(curr_rgb, inpaint_mask, 7, cv2.INPAINT_NS) # 3 is inpaint radius.
+            curr_occ[inpaint_mask.astype(bool)] = D-d
+            mask = curr_occ_large > 0
+        else:
+            mask = curr_occ > 0
+        # If there is any occupancy, overwrite the pixel's RGB and depth
+        
+        composite_rgb[mask] = curr_rgb[mask]
+        composite_depth[mask] = D-d
+
+    # Return a (4, H, W) image: three RGB channels and one depth channel
+    return np.concatenate([composite_rgb, composite_depth[...,None]], axis=-1).astype(np.uint8)
+    
+def preprocess_pcd(np_pcd):
+    # delete table points
+    table_mask = (np_pcd[:, 2] > 0.82)
+    ws_mask = (np_pcd[:, 0] > WORKSPACE[0, 0]) * (np_pcd[:, 0] < WORKSPACE[0, 1]) * (np_pcd[:, 1] > WORKSPACE[1, 0]) * (np_pcd[:, 1] < WORKSPACE[1, 1]) * (np_pcd[:, 2] > WORKSPACE[2, 0]) * (np_pcd[:, 2] < WORKSPACE[2, 1])
+    # padd fake table points. x and y are grid points in workspace
+    num_points = 10000
+    fake_table_points = np.zeros((num_points, 6))
+    grid_size = int(np.ceil(np.sqrt(num_points)))
+    enlarge = 0.8
+    grid_x = np.linspace(WORKSPACE[0, 0]-enlarge, WORKSPACE[0, 1]+enlarge, grid_size)
+    grid_y = np.linspace(WORKSPACE[1, 0]-enlarge, WORKSPACE[1, 1]+enlarge, grid_size)
+    gx, gy = np.meshgrid(grid_x, grid_y)
+    gx = gx.flatten()[:num_points]
+    gy = gy.flatten()[:num_points]
+    fake_table_points[:, 0] = gx
+    fake_table_points[:, 1] = gy
+    fake_table_points[:, 2] = 0.82
+    fake_table_points[:, 3:] = 1.0
+
+    np_pcd = np.concatenate([np_pcd[ws_mask*table_mask], fake_table_points], axis=0)
+    return np_pcd
 
 def np2o3d(pcd, color=None):
     # pcd: (n, 3)
@@ -505,15 +629,18 @@ def populate_point_num(pcd, point_num):
 def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float = 0.01):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
     assert (pcds[0, :, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
+    # voxel_size = voxel_size - 1e-4  # to avoid numerical issues with voxel grid creation
 
     # Define voxel bounds
     if gripper_crop is None:
         voxel_bound = WORKSPACE.T
     else:
+        x_offset = 0.1
+        z_offset = 0.05 # because we dont need to see the entire gripper in the voxel grid
         voxel_bound = np.array([
+            [-gripper_crop+x_offset, gripper_crop+x_offset],
             [-gripper_crop, gripper_crop],
-            [-gripper_crop, gripper_crop],
-            [-gripper_crop, gripper_crop]
+            [-gripper_crop+z_offset, gripper_crop+z_offset]
         ]).T
 
     # Precompute voxel grid dimensions
@@ -522,6 +649,7 @@ def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float
     grid_size = ((grid_max - grid_min) / voxel_size).astype(int)
     voxel_reso = grid_size[0]
     grid_size = np.clip(grid_size, 0, VOXEL_RESO)
+    assert voxel_reso in [32, 64, 84, 128], f"Voxel resolution {voxel_reso} is not supported. Supported resolutions are 32, 64, and 128."
 
     # # Preallocate voxel array
     # batch_voxels = np.zeros((len(pcds), 4, VOXEL_RESO, VOXEL_RESO, VOXEL_RESO), dtype=np.float32)
