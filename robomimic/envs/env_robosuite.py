@@ -189,18 +189,23 @@ def render_pcd_from_pose(ee_pose, gripper_qpos, fix_point_num=4412, model_type='
     ee_pose has a shpae of (N, 7) where 7 means (x, y, z, qx, qy, qz, qw)
     is_add_noisy is used to add noise to the point cloud.
     """
-    assert gripper_qpos.shape[-1] == 2, "gripper_qpos should have a shape of (N, 2)"
     if model_type not in ['sphere', 'grip_sphere']:
         raise NotImplementedError(f"model type {model_type} not implemented")
+    assert gripper_qpos.shape[-1] in [2, 6], "gripper_qpos should have a shape of (N, 2)"
+    gripper_qpos = gripper_qpos.reshape(-1, gripper_qpos.shape[-1])
+        
+        
 
     B = list(ee_pose.shape[:-1])
         
     ee_pose = ee_pose.reshape(-1, 7)
-    gripper_qpos = gripper_qpos.reshape(-1, 2)
     batch_size, ndim = ee_pose.shape
     pcds = []
     for i in range(batch_size):
-        is_grasp = (np.abs(gripper_qpos[i]) < 0.021).any()
+        if gripper_qpos.shape[-1] == 2:
+            is_grasp = (np.abs(gripper_qpos[i, :2]) < 0.021).any()
+        elif gripper_qpos.shape[-1] == 6:
+            is_grasp = gripper_qpos[i][0]>0.04
         gripper_pcd = get_gripper_pcd(is_grasp, is_pose_sphere=(model_type == 'sphere'))
         tran_mat = np.eye(4)
         tran_mat[:3, 3] = ee_pose[i, :3] 
@@ -479,7 +484,8 @@ class EnvRobosuite(EB.EnvBase):
                 #----------- get raw pcd without robot-----------------
                 seg = di[f'{camera_name}_segmentation_instance'][::-1][...,-1]
                 robot_id = [seg.max(), seg.max()-1, seg.max()-2]  # robot is always the last 3 ids
-                robot = enlarge_mask(((seg == robot_id[0]) | (seg == robot_id[1]) | (seg == robot_id[2])), kernel_size=5)
+                robot = (seg == robot_id[0]) | enlarge_mask(seg == robot_id[1], kernel_size=2) | (seg == robot_id[2])
+                # robot = ((seg == robot_id[0]) | (seg == robot_id[1]) | (seg == robot_id[2]))
 
                 depth_no_robot = depth.copy()
                 rgb_no_robot = color.copy()
@@ -509,32 +515,38 @@ class EnvRobosuite(EB.EnvBase):
                 if "eye_in_hand" not in camera_name:
                     all_pcds_no_robot += pcd_o3d
 
+            # get pcd
             np_pcd = o3d2np(all_pcds)
-            np_voxels = pcd_to_voxel(np_pcd[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
-
             np_pcd_no_robot = o3d2np(all_pcds_no_robot)
             eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
+            np_pcd_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0]
+            # get render pcd
             geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'sphere')
             pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
-            np_voxels_render = pcd_to_voxel(pcd_render[None,...], None, voxel_size=WS_SIZE/voxel_size)[0]
-            # np_voxels = np.moveaxis(np_voxels, [0, 1, 2, 3], [0, 3, 2, 1])
-            # np_voxels = np.flip(np_voxels, (1, 2))
 
-            local_pcds = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')
-            # local_pcd, is_emptys = crop_local_pcd_batch(np_pcd[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
-            local_voxel = pcd_to_voxel(local_pcds, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/LOCAL_VOXEL_RESO)[0]
-            # visualize_voxel(local_voxel[0])
-
-            # local_pcd_render, is_emptys = crop_local_pcd_batch(pcd_render[None,...], eef_pos[None,...], bbox_size_m=BBOX_SIZE_M, fix_point_num=1024)
+            # get global voxel
+            np_voxel = pcd_to_voxel(np_pcd[None,...])[0]
+            # get relative global voxel
+            np_voxel_rel = pcd_to_voxel(np_pcd_rel[None,...], 'relative')[0]
+            local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')[0]
+            np_voxel_render_rel = pcd_to_voxel(local_pcd_renders[None,...], 'relative')[0]
+            # get no-robot voxel
+            np_voxel_render = pcd_to_voxel(pcd_render[None,...])[0]
+            # get local obs
+            local_voxel = pcd_to_voxel(np_pcd_rel[None,...], 'gripper')[0]
+            # get render obs
             geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'grip_sphere')
             np_pcd_no_robot = preprocess_pcd(np_pcd_no_robot)
             pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
             local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')
-            local_voxel_render = pcd_to_voxel(local_pcd_renders, BBOX_SIZE_M/2, voxel_size=BBOX_SIZE_M/LOCAL_VOXEL_RESO)[0]
+            local_voxel_render = pcd_to_voxel(local_pcd_renders, 'gripper')[0]
 
-            ret['voxels'] = np_voxels
-            ret['local_voxels'] = local_voxel
-            ret['render_voxels'] = np_voxels_render
+            ret['voxels'] = np_voxel
+            ret['rel_voxels'] = np_voxel_rel
+            ret['local_voxel'] = local_voxel
+
+            ret['render_voxels'] = np_voxel_render
+            ret['rel_render_voxels'] = np_voxel_render_rel
             ret['local_render_voxel'] = local_voxel_render
             ret['local_render_image'] = all_rgb_no_robot_dict['robot0_eye_in_hand']
             # voxel_to_rgbd(local_voxel_render)

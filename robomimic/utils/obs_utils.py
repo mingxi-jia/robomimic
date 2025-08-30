@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation
 import re
 import open3d as o3d
 import cv2
+import copy 
 
 import torch
 import torch.nn.functional as F
@@ -626,27 +627,38 @@ def populate_point_num(pcd, point_num):
 #         voxels.append(np_voxels)
 #     return np.stack(voxels)
 
-def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float = None, voxel_size: float = 0.01):
+def pcd_to_voxel(pcds: np.ndarray, input_type: str = 'absolute'):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
     assert (pcds[0, :, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
-    # voxel_size = voxel_size - 1e-4  # to avoid numerical issues with voxel grid creation
+    assert input_type in ['absolute', 'relative', 'gripper'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
 
     # Define voxel bounds
-    if gripper_crop is None:
-        voxel_bound = WORKSPACE.T
-    else:
-        x_offset = 0.1
+    if input_type == 'gripper':
+        local_size = BBOX_SIZE_M / 2
+        x_offset = 0.
         z_offset = 0.05 # because we dont need to see the entire gripper in the voxel grid
         voxel_bound = np.array([
-            [-gripper_crop+x_offset, gripper_crop+x_offset],
-            [-gripper_crop, gripper_crop],
-            [-gripper_crop+z_offset, gripper_crop+z_offset]
+            [-local_size+x_offset, local_size+x_offset],
+            [-local_size, local_size],
+            [-local_size+z_offset, local_size+z_offset]
         ]).T
+        voxel_size = BBOX_SIZE_M/LOCAL_VOXEL_RESO
+    elif input_type == 'relative':
+        ws_size = WS_SIZE * 2
+        voxel_bound = np.array([
+            [-ws_size/2, ws_size/2],
+            [-ws_size/2, ws_size/2],
+            [-ws_size/2, ws_size/2]
+        ]).T
+        voxel_size = ws_size / VOXEL_RESO
+    else:
+        voxel_bound = WORKSPACE.T
+        voxel_size = WS_SIZE / VOXEL_RESO
 
     # Precompute voxel grid dimensions
     grid_min = voxel_bound[0]
     grid_max = voxel_bound[1]
-    grid_size = ((grid_max - grid_min) / voxel_size).astype(int)
+    grid_size = ((grid_max - grid_min) / voxel_size  + 1e-4).astype(int)
     voxel_reso = grid_size[0]
     grid_size = np.clip(grid_size, 0, VOXEL_RESO)
     assert voxel_reso in [32, 64, 84, 128], f"Voxel resolution {voxel_reso} is not supported. Supported resolutions are 32, 64, and 128."
@@ -740,6 +752,7 @@ def localize_pcd_batch(pcds, previous_eef_poses, local_type='xyz'):
     Returns:
     - array of images of shape (batch_size, height, width, channels), np.uint8
     """
+    pcds = copy.deepcopy(pcds)
     is_batch = False
     if len(pcds.shape) == 4:
         is_batch = True
