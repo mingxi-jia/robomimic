@@ -105,7 +105,7 @@ def populate_point_num(pcd, point_num):
         pcd = pcd[shuffle_idx]
     return pcd
 
-def generate_sphere_pcd():
+def generate_sphere_pcd(is_rot_colorful=True):
     num_points = 896  # adjust the number of points as needed
     r = 0.05  # sphere radius, modify r if needed
     indices = np.arange(num_points, dtype=float) + 0.5
@@ -124,16 +124,17 @@ def generate_sphere_pcd():
     mask7 = (x < 0) & (y < 0) & (z < 0)
     mask8 = (x >= 0) & (y < 0) & (z < 0)
 
-    colors[mask1] = [1.0, 0.0, 0.0]   # red      : (+x, +y, +z)
-    colors[mask2] = [0.0, 1.0, 0.0]   # green    : (-x, +y, +z)
-    colors[mask3] = [0.0, 0.0, 1.0]   # blue     : (-x, -y, +z)
-    colors[mask4] = [1.0, 1.0, 0.0]   # yellow   : (+x, -y, +z)
-    colors[mask5] = [1.0, 0.0, 1.0]   # magenta  : (+x, +y, -z)
-    colors[mask6] = [0.0, 1.0, 1.0]   # cyan     : (-x, +y, -z)
-    colors[mask7] = [0.5, 0.5, 0.5]   # grey     : (-x, -y, -z)
-    colors[mask8] = [1.0, 0.5, 0.0]   # orange   : (+x, -y, -z)
-    # colors = np.tile(np.array([0., 1., 0.]), (num_points, 1)) 
-    # colors = np.where(y[:, None] < 0, np.array([0., 1., 0.]), np.array([0., 0., 1.]))
+    if is_rot_colorful:
+        colors[mask1] = [1.0, 0.0, 0.0]   # red      : (+x, +y, +z)
+        colors[mask2] = [0.0, 1.0, 0.0]   # green    : (-x, +y, +z)
+        colors[mask3] = [0.0, 0.0, 1.0]   # blue     : (-x, -y, +z)
+        colors[mask4] = [1.0, 1.0, 0.0]   # yellow   : (+x, -y, +z)
+        colors[mask5] = [1.0, 0.0, 1.0]   # magenta  : (+x, +y, -z)
+        colors[mask6] = [0.0, 1.0, 1.0]   # cyan     : (-x, +y, -z)
+        colors[mask7] = [0.5, 0.5, 0.5]   # grey     : (-x, -y, -z)
+        colors[mask8] = [1.0, 0.5, 0.0]   # orange   : (+x, -y, -z)
+        # colors = np.tile(np.array([0., 1., 0.]), (num_points, 1)) 
+        # colors = np.where(y[:, None] < 0, np.array([0., 1., 0.]), np.array([0., 0., 1.]))
     return np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
 
 # def generate_sphere_pcd():
@@ -162,9 +163,10 @@ def generate_sphere_pcd():
 
 #     return np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
 
-SPHERE = generate_sphere_pcd()
+SPHERE = generate_sphere_pcd(is_rot_colorful=True)
+SPHERE_NO_COLOR = generate_sphere_pcd(is_rot_colorful=False)
 
-def get_gripper_pcd(is_grasp, is_pose_sphere=True):
+def get_gripper_pcd(is_grasp, model_type):
     # make a sphere r=0.01. It turns black when the gripper is closed else white
     # is_grasp: bool, if True, return a sphere pcd with color black, else return a sphere pcd with color gray
     num_points = 128
@@ -177,20 +179,21 @@ def get_gripper_pcd(is_grasp, is_pose_sphere=True):
     z = r * np.cos(phi)
     colors = np.zeros((num_points, 3), dtype=np.float32) if is_grasp else np.ones((num_points, 3), dtype=np.float32) * 0.5
     SPHERE_GRIP = np.concatenate([np.stack([x, y, z], axis=1), colors], axis=1)
-    sphere = copy.deepcopy(SPHERE)
-    if is_pose_sphere:
-        return np.concatenate([sphere, SPHERE_GRIP], axis=0)
-    else:
+    if model_type == 'color_sphere':
+        return np.concatenate([copy.deepcopy(SPHERE), SPHERE_GRIP], axis=0)
+    elif model_type == 'grip_sphere':
         return SPHERE_GRIP
+    elif model_type == 'sphere':
+        return np.concatenate([copy.deepcopy(SPHERE_NO_COLOR), SPHERE_GRIP], axis=0)
+    else:
+        raise NotImplementedError(f"model type {model_type} not implemented")
 
-def render_pcd_from_pose(ee_pose, gripper_qpos, fix_point_num=4412, model_type='sphere'):
+def render_pcd_from_pose(ee_pose, gripper_qpos, fix_point_num=4412, model_type='color_sphere'):
     """
     Render the gripper point cloud at the given end effector pose.
     ee_pose has a shpae of (N, 7) where 7 means (x, y, z, qx, qy, qz, qw)
     is_add_noisy is used to add noise to the point cloud.
     """
-    if model_type not in ['sphere', 'grip_sphere']:
-        raise NotImplementedError(f"model type {model_type} not implemented")
     assert gripper_qpos.shape[-1] in [2, 6], "gripper_qpos should have a shape of (N, 2)"
     gripper_qpos = gripper_qpos.reshape(-1, gripper_qpos.shape[-1])
         
@@ -206,7 +209,7 @@ def render_pcd_from_pose(ee_pose, gripper_qpos, fix_point_num=4412, model_type='
             is_grasp = (np.abs(gripper_qpos[i, :2]) < 0.021).any()
         elif gripper_qpos.shape[-1] == 6:
             is_grasp = gripper_qpos[i][0]>0.04
-        gripper_pcd = get_gripper_pcd(is_grasp, is_pose_sphere=(model_type == 'sphere'))
+        gripper_pcd = get_gripper_pcd(is_grasp, model_type=model_type)
         tran_mat = np.eye(4)
         tran_mat[:3, 3] = ee_pose[i, :3] 
         tran_mat[:3, :3] = R.from_quat(ee_pose[i, 3:7]).as_matrix()
@@ -515,45 +518,40 @@ class EnvRobosuite(EB.EnvBase):
                 if "eye_in_hand" not in camera_name:
                     all_pcds_no_robot += pcd_o3d
 
-            # get pcd
+            # get raw pcd with robot
             np_pcd = o3d2np(all_pcds)
-            np_pcd_no_robot = o3d2np(all_pcds_no_robot)
-            eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
-            np_pcd_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0]
-            # get render pcd
-            geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'sphere')
-            pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
-
-            # get global voxel
             np_voxel = pcd_to_voxel(np_pcd[None,...])[0]
-            # get relative global voxel
-            np_voxel_rel = pcd_to_voxel(np_pcd_rel[None,...], 'relative')[0]
-            local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')[0]
-            np_voxel_render_rel = pcd_to_voxel(local_pcd_renders[None,...], 'relative')[0]
-            # get no-robot voxel
+            eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
+            np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0]
+            local_voxel = pcd_to_voxel(np_pcd_se3_rel[None,...], 'gripper_se3')[0]
+
+            ret['voxels'] = np_voxel
+            ret['local_voxel'] = local_voxel
+
+            # get render pcd
+            np_pcd_no_robot = o3d2np(all_pcds_no_robot)
+            color_geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'color_sphere')
+            pcd_render = np.concatenate([np_pcd_no_robot, color_geco], axis=0)
             np_voxel_render = pcd_to_voxel(pcd_render[None,...])[0]
-            # get local obs
-            local_voxel = pcd_to_voxel(np_pcd_rel[None,...], 'gripper')[0]
-            # get render obs
+
             geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'grip_sphere')
             np_pcd_no_robot = preprocess_pcd(np_pcd_no_robot)
             pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
             local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')
-            local_voxel_render = pcd_to_voxel(local_pcd_renders, 'gripper')[0]
-
-            ret['voxels'] = np_voxel
-            ret['rel_voxels'] = np_voxel_rel
-            ret['local_voxel'] = local_voxel
+            local_voxel_render = pcd_to_voxel(local_pcd_renders, 'gripper_se3')[0]
 
             ret['render_voxels'] = np_voxel_render
-            ret['rel_render_voxels'] = np_voxel_render_rel
             ret['local_render_voxel'] = local_voxel_render
-            ret['local_render_image'] = all_rgb_no_robot_dict['robot0_eye_in_hand']
-            # voxel_to_rgbd(local_voxel_render)
-            # 4412 is a empirical value for reso=0.01m calculated by all_pcds.voxel_down_sample(voxel_size=0.01)
-            # ret['pcd'] = o3d2np(all_pcds, 4412) 
-            # ret['spaceview_pcd'] = o3d2np(all_pcds_dict['spaceview'], 2048) 
-            # ret['pcd_no_robot'] = o3d2np(all_pcds_no_robot, 4412) 
+
+            # # get render pcd without rotation color
+            # norot_geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'sphere')
+            # pcd_render_nocolor = np.concatenate([np_pcd_no_robot, norot_geco], axis=0)
+            # np_voxel_render_nocolor = pcd_to_voxel(pcd_render_nocolor[None,...])[0]
+            # local_pcd_renders_nocolor = localize_pcd_batch(pcd_render_nocolor[None,...], eef_pos, local_type='se3')[0]
+            # np_voxel_render_rel_nocolor = pcd_to_voxel(local_pcd_renders_nocolor[None,...], 'relative')[0]
+            # ret['nocolor_render_voxels'] = np_voxel_render_nocolor
+            # ret['nocolor_rel_render_voxels'] = np_voxel_render_rel_nocolor
+
             
 
         if self._is_v1:

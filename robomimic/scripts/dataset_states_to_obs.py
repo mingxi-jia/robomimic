@@ -156,14 +156,26 @@ def extract_trajectory(
         use_depth_obs=True,
         render=render
     )
+    # sample_rate = 3
+    # # sample uniformly states.shape[0]//predefine_length
+    # states = states[::sample_rate]
+    # actions = actions[::sample_rate]
+    # print(f"trajectory ({states.shape[0]} states) is too long, sample every {sample_rate} to ({states.shape[0]} states)")
+         
     assert states.shape[0] == actions.shape[0]
 
     # load the initial state
     env.reset()
     if render:
         env.env.viewer.set_camera(camera_id=0)
-    obs = env.reset_to(initial_state)
 
+    initial_xml =  initial_state['model']
+    del initial_state['model']
+    obs = env.reset_to(initial_state)
+    # save modified model xml for this episode
+    initial_state['model'] = env.env.edit_model_xml(initial_xml)
+
+    
     # maybe add in intrinsics and extrinsics for all cameras
     camera_info = None
     is_robosuite_env = EnvUtils.is_robosuite_env(env=env)
@@ -368,7 +380,7 @@ def dataset_states_to_obs(args):
     f = h5py.File(args.dataset, "r")
     demos = list(f["data"].keys())
     inds = np.argsort([int(elem[5:]) for elem in demos])
-    demos = [demos[i] for i in inds]
+    demos = np.array(demos)[inds].tolist()
 
     assert len(demos) > 0, "No demonstrations found in dataset {}".format(args.dataset)
     assert len(demos) >= args.n, f"Number of demonstrations in dataset {args.dataset} ({len(demos)}) is less than n ({args.n})"
@@ -387,7 +399,7 @@ def dataset_states_to_obs(args):
     total_samples = 0
     num_workers = args.num_workers
     
-    
+    start_idx = 0
     for i in range(0, len(demos), num_workers):
         end = min(i + num_workers, len(demos))
         initial_state_list = []
@@ -411,7 +423,8 @@ def dataset_states_to_obs(args):
         # output = worker([env_meta, args, camera_names, initial_state_list[0], states_list[0], actions_list[0], store_voxel, store_pcd, render])
 
         for j, ind in enumerate(range(i, end)):
-            ep = demos[ind]
+            # ep = demos[ind]
+            ep = f"demo_{start_idx}"
             traj, camera_info = output[j]
             exclude_cameras_from_obs(traj, additional_camera_for_voxel, store_voxel)
             # maybe copy reward or done signal from source file
@@ -450,6 +463,7 @@ def dataset_states_to_obs(args):
             ep_data_grp.attrs["num_samples"] = traj["actions"].shape[0] # number of transitions in this episode
             total_samples += traj["actions"].shape[0]
             print("ep {}: wrote {} transitions to group {}".format(ind, ep_data_grp.attrs["num_samples"], ep))
+            start_idx += 1
         
 
 

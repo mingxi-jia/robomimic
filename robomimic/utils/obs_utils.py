@@ -630,13 +630,13 @@ def populate_point_num(pcd, point_num):
 def pcd_to_voxel(pcds: np.ndarray, input_type: str = 'absolute'):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
     assert (pcds[0, :, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
-    assert input_type in ['absolute', 'relative', 'gripper'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
+    assert input_type in ['absolute', 'relative', 'gripper_xyz', 'gripper_se3'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
 
     # Define voxel bounds
-    if input_type == 'gripper':
+    if input_type in ['gripper_xyz', 'gripper_se3']:
         local_size = BBOX_SIZE_M / 2
         x_offset = 0.
-        z_offset = 0.05 # because we dont need to see the entire gripper in the voxel grid
+        z_offset = 0.05 if input_type=='gripper_se3' else 0.# because we dont need to see the entire gripper in the voxel grid
         voxel_bound = np.array([
             [-local_size+x_offset, local_size+x_offset],
             [-local_size, local_size],
