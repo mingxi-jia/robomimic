@@ -71,7 +71,7 @@ center = np.array([0, 0, 0.7])
 WS_SIZE = 0.6
 VOXEL_RESO = 64
 LOCAL_VOXEL_RESO = 64
-BBOX_SIZE_M = 0.4
+BBOX_SIZE_M = 0.3
 WORKSPACE = np.array([
     [center[0] - WS_SIZE/2, center[0] + WS_SIZE/2],
     [center[1] - WS_SIZE/2, center[1] + WS_SIZE/2],
@@ -218,6 +218,10 @@ def o3d2np(pcd_o3d, num_samples=4412):
     xyz = np.asarray(pcd_o3d.points)
     rgb = np.asarray(pcd_o3d.colors)
     num_points = xyz.shape[0]
+
+    mask = (xyz[:, 0] >= WORKSPACE[0, 0]) * (xyz[:, 0] <= WORKSPACE[0, 1]) * (xyz[:, 1] >= WORKSPACE[1, 0]) * (xyz[:, 1] <= WORKSPACE[1, 1]) * (xyz[:, 2] >= WORKSPACE[2, 0]) * (xyz[:, 2] <= WORKSPACE[2, 1])
+    xyz = xyz[mask]
+    rgb = rgb[mask]
 
     if num_points > num_samples:
         pcd_o3d = pcd_o3d.farthest_point_down_sample(num_samples=num_samples)
@@ -575,17 +579,14 @@ def convert_sideview_to_gripper_batch(sim, images, goal_key, robot0_eef_pos, cam
     return gripper_centered_current_obs, bbox_center_in_image
 
 def populate_point_num(pcd, point_num):
-    if pcd.shape[0] < point_num:
-        # pad_pcd = np.repeat(pcd[0:1], point_num-pcd.shape[0], axis=0) # get a random point
+    if pcd.shape[0] == 0:
+        pcd = np.zeros((point_num, 6))
+    elif 0 < pcd.shape[0] < point_num:
         extra_choice = np.random.choice(pcd.shape[0], point_num-pcd.shape[0], replace=True)
-        # choice = np.concatenate((np.arange(points.shape[0]), extra_choice))
         pcd = np.concatenate([pcd, pcd[extra_choice]], axis=0)
     else:
         shuffle_idx = np.random.permutation(pcd.shape[0])[:point_num]
         pcd = pcd[shuffle_idx]
-        # _, indices = sample_farthest_points(torch.from_numpy(pcd[None, :, :3]), K=point_num)
-        # indices = indices[0].numpy()
-        # pcd = pcd[indices]
     return pcd
 
 # def pcd_to_voxel(pcds: np.ndarray, gripper_crop: float=None, voxel_size: float = 0.01):
@@ -627,16 +628,59 @@ def populate_point_num(pcd, point_num):
 #         voxels.append(np_voxels)
 #     return np.stack(voxels)
 
+def sample_pcd(pcd: np.ndarray, num_points: int = 1024):
+    if pcd.shape[0] > num_points:
+        pcd_o3d = np2o3d(pcd[:, :3], pcd[:, 3:6])
+        pcd_o3d = pcd_o3d.farthest_point_down_sample(num_samples=num_points)
+        xyz = np.asarray(pcd_o3d.points)
+        rgb = np.asarray(pcd_o3d.colors)
+        pcd_np = np.concatenate([xyz, rgb], axis=1)
+    else:
+        pcd_np = populate_point_num(pcd, num_points)
+    return pcd_np
+
+def crop_pcd(pcd: np.ndarray, input_type: str = 'absolute', num_points: int = 1024):
+    assert pcd.shape[1] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
+    assert (pcd[0, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
+    assert input_type in ['absolute', 'relative', 'gripper'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
+
+    # Define voxel bounds
+    if input_type == 'gripper':
+        local_size = BBOX_SIZE_M / 2
+        x_offset = 0.
+        # z_offset = 0.05 if input_type=='gripper_se3' else 0.# because we dont need to see the entire gripper in the voxel grid
+        z_offset = 0.
+        bound = np.array([
+            [-local_size+x_offset, local_size+x_offset],
+            [-local_size, local_size],
+            [-local_size+z_offset, local_size+z_offset]
+        ])
+    elif input_type == 'relative':
+        ws_size = WS_SIZE * 2
+        bound = np.array([
+            [-ws_size/2, ws_size/2],
+            [-ws_size/2, ws_size/2],
+            [-ws_size/2, ws_size/2]
+        ])
+    else:
+        bound = WORKSPACE
+
+    pcd = copy.deepcopy(pcd)
+    mask = (pcd[:, 0] >= bound[0, 0]) * (pcd[:, 0] <= bound[0, 1]) * (pcd[:, 1] >= bound[1, 0]) * (pcd[:, 1] <= bound[1, 1]) * (pcd[:, 2] >= bound[2, 0]) * (pcd[:, 2] <= bound[2, 1])
+    pcd = pcd[mask]
+    return sample_pcd(pcd, num_points)
+
 def pcd_to_voxel(pcds: np.ndarray, input_type: str = 'absolute'):
     assert pcds.shape[2] == 6, "PCD CONVERSION ERROR: pcd shape is incorrect"
     assert (pcds[0, :, 3:6] <= 1.).all(), "PCD CONVERSION ERROR: pcd color is incorrect"
-    assert input_type in ['absolute', 'relative', 'gripper_xyz', 'gripper_se3'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
+    assert input_type in ['absolute', 'relative', 'gripper'], "PCD CONVERSION ERROR: input_type should be absolute or gripper_crop"
 
     # Define voxel bounds
-    if input_type in ['gripper_xyz', 'gripper_se3']:
+    if input_type == 'gripper':
         local_size = BBOX_SIZE_M / 2
         x_offset = 0.
-        z_offset = 0.05 if input_type=='gripper_se3' else 0.# because we dont need to see the entire gripper in the voxel grid
+        # z_offset = 0.05 if input_type=='gripper_se3' else 0.# because we dont need to see the entire gripper in the voxel grid
+        z_offset = 0.
         voxel_bound = np.array([
             [-local_size+x_offset, local_size+x_offset],
             [-local_size, local_size],

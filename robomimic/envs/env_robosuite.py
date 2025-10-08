@@ -35,7 +35,7 @@ from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, BBOX_SI
                                        discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
                                        crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
                                        convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, 
-                                       crop_local_pcd_batch, preprocess_pcd, voxel_to_rgbd, enlarge_mask)
+                                       crop_local_pcd_batch, preprocess_pcd, voxel_to_rgbd, enlarge_mask, crop_pcd, sample_pcd)
 
 
 import cv2
@@ -461,6 +461,8 @@ class EnvRobosuite(EB.EnvBase):
             all_pcds_no_robot = o3d.geometry.PointCloud()
             all_rgb_no_robot_dict = dict()
             for cam_idx, camera_name in enumerate(self.env.camera_names):
+                if "eye_in_hand" in camera_name:
+                    continue
                 cam_height = self.env.camera_heights[cam_idx]
                 cam_width = self.env.camera_widths[cam_idx]
                 ext_mat = get_camera_extrinsic_matrix(self.env.sim, camera_name)
@@ -520,37 +522,41 @@ class EnvRobosuite(EB.EnvBase):
 
             # get raw pcd with robot
             np_pcd = o3d2np(all_pcds)
-            np_voxel = pcd_to_voxel(np_pcd[None,...])[0]
             eef_pos = np.concatenate([di['robot0_eef_pos'], di['robot0_eef_quat']], axis=-1)
-            np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0]
-            local_voxel = pcd_to_voxel(np_pcd_se3_rel[None,...], 'gripper_se3')[0]
 
-            ret['voxels'] = np_voxel
-            ret['local_voxel'] = local_voxel
+            use_voxel = False
+            if use_voxel:
+                np_pcd = np_pcd[np_pcd[:,2]>0.82]
+                # np_pcd = sample_pcd(np_pcd, 1024)
+                np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='xyz')[0]
+                local_voxel = pcd_to_voxel(np_pcd_se3_rel[None,...], 'gripper')[0]
 
-            # get render pcd
-            np_pcd_no_robot = o3d2np(all_pcds_no_robot)
-            color_geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'color_sphere')
-            pcd_render = np.concatenate([np_pcd_no_robot, color_geco], axis=0)
-            np_voxel_render = pcd_to_voxel(pcd_render[None,...])[0]
+                ret['voxels'] = pcd_to_voxel(np_pcd[None,...])[0]
+                ret['rel_voxels'] = pcd_to_voxel(np_pcd_se3_rel[None,...], 'relative')[0]
+                ret['local_voxel'] = local_voxel
 
-            geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'grip_sphere')
-            np_pcd_no_robot = preprocess_pcd(np_pcd_no_robot)
-            pcd_render = np.concatenate([np_pcd_no_robot, geco], axis=0)
-            local_pcd_renders = localize_pcd_batch(pcd_render[None,...], eef_pos, local_type='se3')
-            local_voxel_render = pcd_to_voxel(local_pcd_renders, 'gripper_se3')[0]
+                # # get render pcd
+                # np_pcd_no_robot = o3d2np(all_pcds_no_robot)
+                # color_geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'color_sphere')
+                # pcd_render = np.concatenate([np_pcd_no_robot, color_geco], axis=0)
 
-            ret['render_voxels'] = np_voxel_render
-            ret['local_render_voxel'] = local_voxel_render
+                # geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'grip_sphere')
+                # np_pcd_no_robot = preprocess_pcd(np_pcd_no_robot)
+                # pcd_render_geco = np.concatenate([np_pcd_no_robot, geco], axis=0)
+                # local_pcd_renders = localize_pcd_batch(pcd_render_geco[None,...], eef_pos, local_type='xyz')
+                # local_voxel_render = pcd_to_voxel(local_pcd_renders, 'gripper')[0]
 
-            # # get render pcd without rotation color
-            # norot_geco = render_pcd_from_pose(eef_pos, di['robot0_gripper_qpos'], 1024, 'sphere')
-            # pcd_render_nocolor = np.concatenate([np_pcd_no_robot, norot_geco], axis=0)
-            # np_voxel_render_nocolor = pcd_to_voxel(pcd_render_nocolor[None,...])[0]
-            # local_pcd_renders_nocolor = localize_pcd_batch(pcd_render_nocolor[None,...], eef_pos, local_type='se3')[0]
-            # np_voxel_render_rel_nocolor = pcd_to_voxel(local_pcd_renders_nocolor[None,...], 'relative')[0]
-            # ret['nocolor_render_voxels'] = np_voxel_render_nocolor
-            # ret['nocolor_rel_render_voxels'] = np_voxel_render_rel_nocolor
+                # ret['render_voxels'] = pcd_to_voxel(pcd_render[None,...])[0]
+                # ret['rel_render_voxels'] = pcd_to_voxel(local_pcd_renders, 'relative')[0]
+                # ret['local_render_voxel'] = local_voxel_render
+            else:
+                np_pcd = np_pcd[np_pcd[:,2]>0.82]
+                np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='xyz')[0]
+                ret['pcd'] = crop_pcd(np_pcd, input_type='absolute')
+                ret['rel_pcd'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
+                ret['local_pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='gripper')
+                ret['local_pcd_se3'] = crop_pcd(localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0], input_type='gripper')
+
 
             
 

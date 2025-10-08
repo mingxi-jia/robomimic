@@ -239,13 +239,13 @@ def extract_trajectory(
 
     # convert list of dict to dict of list for obs dictionaries (for convenient writes to hdf5 dataset)
     traj["obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["obs"])
-    traj["next_obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["next_obs"])
+    del traj["next_obs"]
+    # traj["next_obs"] = TensorUtils.list_of_flat_dict_to_dict_of_list(traj["next_obs"])
 
     if not store_voxel:
         try:
             del traj["obs"]['voxels']
             del traj["obs"]['local_voxels']
-            del traj["next_obs"]['voxels']
         except:
             pass
 
@@ -255,7 +255,6 @@ def extract_trajectory(
             if "pcd" in k:
                 try:
                     del traj["obs"][k]
-                    del traj["next_obs"][k]
                 except:
                     pass
 
@@ -350,7 +349,7 @@ def dataset_states_to_obs(args):
     assert main_camera in camera_names, "ERROR: You need to include main_camera in camera_names."
     # env_meta['env_kwargs']['main_camera'] = main_camera
     print(camera_names)
-    additional_camera_for_voxel = ['sideview2', 'backview'] if store_voxel or multiview else []
+    additional_camera_for_voxel = ['sideview', 'sideview2', 'backview'] if store_voxel or multiview or store_pcd else []
     camera_names = camera_names + additional_camera_for_voxel
 
     env = EnvUtils.create_env_for_data_processing(
@@ -523,7 +522,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--camera_names",
         type=str,
-        default='spaceview robot0_eye_in_hand',
+        default='agentview robot0_eye_in_hand',
         help="(optional) camera name(s) to use for image observations. Leave out to not use image observations.",
     )
 
@@ -531,21 +530,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--main_camera",
         type=str,
-        default='frontview',
+        default='agentview',
         help="(optional) main camera for gripper-centric images",
     )
 
     parser.add_argument(
         "--camera_height",
         type=int,
-        default=84,
+        default=128,
         help="(optional) height of image observations",
     )
 
     parser.add_argument(
         "--camera_width",
         type=int,
-        default=84,
+        default=128,
         help="(optional) width of image observations",
     )
 
