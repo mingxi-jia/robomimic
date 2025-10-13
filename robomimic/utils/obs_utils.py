@@ -86,6 +86,24 @@ CLIPSPACE = np.array([
     [center[2], center[2] + CLIP_SIZE]
 ])
 
+def get_clipspace(task_name):
+    if task_name.startswith('HammerCleanup') or task_name.startswith('Kitchen'):
+        # offset x-axis by 0.2m
+        clipspace = CLIPSPACE.copy()
+        clipspace[0] -= 0.2
+    else:
+        clipspace = CLIPSPACE
+    return clipspace
+
+def get_workspace(task_name):
+    if task_name.startswith('HammerCleanup') or task_name.startswith('Kitchen'):
+        # offset x-axis by 0.2m
+        workspace = WORKSPACE.copy()
+        workspace[0] -= 0.2
+    else:
+        workspace = WORKSPACE
+    return workspace
+
 def enlarge_mask(binary_mask, kernel_size, iterations=1):
     """
     Enlarges a binary mask using morphological dilation.

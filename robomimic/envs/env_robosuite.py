@@ -31,11 +31,8 @@ try:
 except ImportError:
     MUJOCO_EXCEPTIONS = []
 
-from robomimic.utils.obs_utils import (DEPTH_MINMAX, WORKSPACE, WS_SIZE, BBOX_SIZE_M, CLIPSPACE, VOXEL_RESO, LOCAL_VOXEL_RESO,
-                                       discretize_depth, undiscretize_depth, xyz_to_bbox_center_batch,
-                                       crop_and_pad_batch, clip_depth_alone_gripper_x_batch, convert_sideview_to_gripper_batch,
-                                       convert_rgbd_to_pcd_batch, depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, 
-                                       crop_local_pcd_batch, preprocess_pcd, voxel_to_rgbd, enlarge_mask, crop_pcd, sample_pcd)
+from robomimic.utils.obs_utils import (depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, 
+                                       enlarge_mask, crop_pcd, get_clipspace, get_workspace)
 
 
 import cv2
@@ -454,8 +451,8 @@ class EnvRobosuite(EB.EnvBase):
             #     [center[0] - ws_size/2, center[1] - ws_size/2, center[2] - 0.05],
             #     [center[0] + ws_size/2, center[1] + ws_size/2, center[2] - 0.05 + ws_size],
             # ])
-            voxel_bound = WORKSPACE.T
-            voxel_size = VOXEL_RESO
+            clipspace = get_clipspace(self._env_name)
+            workspace = get_workspace(self._env_name)
 
             all_pcds = o3d.geometry.PointCloud()
             all_pcds_no_robot = o3d.geometry.PointCloud()
@@ -481,7 +478,7 @@ class EnvRobosuite(EB.EnvBase):
                 # trans_pcd = pose @ np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
-                mask = (trans_pcd[:, 0] > CLIPSPACE[0, 0]) * (trans_pcd[:, 0] < CLIPSPACE[0, 1]) * (trans_pcd[:, 1] > CLIPSPACE[1, 0]) * (trans_pcd[:, 1] < CLIPSPACE[1, 1]) * (trans_pcd[:, 2] > CLIPSPACE[2, 0]) * (trans_pcd[:, 2] < CLIPSPACE[2, 1])
+                mask = (trans_pcd[:, 0] > clipspace[0, 0]) * (trans_pcd[:, 0] < clipspace[0, 1]) * (trans_pcd[:, 1] > clipspace[1, 0]) * (trans_pcd[:, 1] < clipspace[1, 1]) * (trans_pcd[:, 2] > clipspace[2, 0]) * (trans_pcd[:, 2] < clipspace[2, 1])
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
                 if "eye_in_hand" not in camera_name:
                     all_pcds += pcd_o3d
@@ -515,7 +512,7 @@ class EnvRobosuite(EB.EnvBase):
                 pcd = depth2fgpcd(depth_no_robot, mask, cam_param)
                 trans_pcd = np.einsum('ij,jk->ik', pose, np.concatenate([pcd.T, np.ones((1, pcd.shape[0]))], axis=0))
                 trans_pcd = trans_pcd[:3, :].T
-                mask = (trans_pcd[:, 0] > WORKSPACE[0, 0]) * (trans_pcd[:, 0] < WORKSPACE[0, 1]) * (trans_pcd[:, 1] > WORKSPACE[1, 0]) * (trans_pcd[:, 1] < WORKSPACE[1, 1]) * (trans_pcd[:, 2] > WORKSPACE[2, 0]) * (trans_pcd[:, 2] < WORKSPACE[2, 1])
+                mask = (trans_pcd[:, 0] > workspace[0, 0]) * (trans_pcd[:, 0] < workspace[0, 1]) * (trans_pcd[:, 1] > workspace[1, 0]) * (trans_pcd[:, 1] < workspace[1, 1]) * (trans_pcd[:, 2] > workspace[2, 0]) * (trans_pcd[:, 2] < workspace[2, 1])
                 pcd_o3d = np2o3d(trans_pcd[mask], color.reshape(-1, 3)[mask].astype(np.float64) / 255)
                 if "eye_in_hand" not in camera_name:
                     all_pcds_no_robot += pcd_o3d

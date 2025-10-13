@@ -575,7 +575,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--done_mode",
         type=int,
-        default=0,
+        default=2,
         help="how to write done signal. If 0, done is 1 whenever s' is a success state.\
             If 1, done is 1 at the end of each trajectory. If 2, both.",
     )
@@ -597,14 +597,16 @@ if __name__ == "__main__":
     # flag to exclude next obs in dataset
     parser.add_argument(
         "--exclude-next-obs", 
-        action='store_true',
+        type=bool,
+        default=True,
         help="(optional) exclude next obs in dataset",
     )
 
     # flag to compress observations with gzip option in hdf5
     parser.add_argument(
         "--compress", 
-        action='store_true',
+        type=bool,
+        default=True,
         help="(optional) compress observations with gzip option in hdf5",
     )
 
