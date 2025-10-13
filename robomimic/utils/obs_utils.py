@@ -104,6 +104,13 @@ def get_workspace(task_name):
         workspace = WORKSPACE
     return workspace
 
+def get_pcd_z_min(task_name):
+    if task_name.startswith('Nut') or task_name.startswith('Square'):
+        pcd_z_min = 0.835
+    else:
+        pcd_z_min = 0.82
+    return pcd_z_min
+
 def enlarge_mask(binary_mask, kernel_size, iterations=1):
     """
     Enlarges a binary mask using morphological dilation.

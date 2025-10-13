@@ -32,7 +32,7 @@ except ImportError:
     MUJOCO_EXCEPTIONS = []
 
 from robomimic.utils.obs_utils import (depth2fgpcd, np2o3d, o3d2np, pcd_to_voxel, localize_pcd_batch, 
-                                       enlarge_mask, crop_pcd, get_clipspace, get_workspace)
+                                       enlarge_mask, crop_pcd, get_clipspace, get_workspace, get_pcd_z_min)
 
 
 import cv2
@@ -547,7 +547,8 @@ class EnvRobosuite(EB.EnvBase):
                 # ret['rel_render_voxels'] = pcd_to_voxel(local_pcd_renders, 'relative')[0]
                 # ret['local_render_voxel'] = local_voxel_render
             else:
-                np_pcd = np_pcd[np_pcd[:,2]>0.82]
+                pcd_z_min = get_pcd_z_min(self._env_name)
+                np_pcd = np_pcd[np_pcd[:,2]>pcd_z_min]
                 np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='xyz')[0]
                 ret['pcd'] = crop_pcd(np_pcd, input_type='absolute')
                 ret['rel_pcd'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
