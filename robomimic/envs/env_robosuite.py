@@ -451,8 +451,9 @@ class EnvRobosuite(EB.EnvBase):
             #     [center[0] - ws_size/2, center[1] - ws_size/2, center[2] - 0.05],
             #     [center[0] + ws_size/2, center[1] + ws_size/2, center[2] - 0.05 + ws_size],
             # ])
-            clipspace = get_clipspace(self._env_name)
-            workspace = get_workspace(self._env_name)
+            table_offset = self.env.table_offset if hasattr(self.env, 'table_offset') else [0, 0, 0.7]
+            clipspace = get_clipspace(self._env_name, table_offset)
+            workspace = get_workspace(self._env_name, table_offset)
 
             all_pcds = o3d.geometry.PointCloud()
             all_pcds_no_robot = o3d.geometry.PointCloud()
@@ -547,11 +548,11 @@ class EnvRobosuite(EB.EnvBase):
                 # ret['rel_render_voxels'] = pcd_to_voxel(local_pcd_renders, 'relative')[0]
                 # ret['local_render_voxel'] = local_voxel_render
             else:
-                pcd_z_min = get_pcd_z_min(self._env_name)
+                pcd_z_min = get_pcd_z_min(self._env_name, table_offset)
                 np_pcd = np_pcd[np_pcd[:,2]>pcd_z_min]
                 np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='xyz')[0]
                 ret['pcd'] = crop_pcd(np_pcd, input_type='absolute')
-                ret['rel_pcd'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
+                ret['pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
                 ret['local_pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='gripper')
                 ret['local_pcd_se3'] = crop_pcd(localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0], input_type='gripper')
 

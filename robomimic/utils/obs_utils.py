@@ -86,29 +86,41 @@ CLIPSPACE = np.array([
     [center[2], center[2] + CLIP_SIZE]
 ])
 
-def get_clipspace(task_name):
+def get_clipspace(task_name, table_offset):
     if task_name.startswith('HammerCleanup') or task_name.startswith('Kitchen'):
-        # offset x-axis by 0.2m
-        clipspace = CLIPSPACE.copy()
-        clipspace[0] -= 0.2
+        ws_size = 0.7 + 0.2
+    elif task_name.startswith('PickPlace_'):
+        ws_size = 1.1 + 0.2
     else:
-        clipspace = CLIPSPACE
+        ws_size = CLIP_SIZE
+    clipspace =np.array([
+                [table_offset[0] - ws_size/2, table_offset[0] + ws_size/2],
+                [table_offset[1] - ws_size/2, table_offset[1] + ws_size/2],
+                [table_offset[2], table_offset[2] + ws_size]
+            ])
     return clipspace
 
-def get_workspace(task_name):
+def get_workspace(task_name, table_offset):
     if task_name.startswith('HammerCleanup') or task_name.startswith('Kitchen'):
-        # offset x-axis by 0.2m
-        workspace = WORKSPACE.copy()
-        workspace[0] -= 0.2
+        ws_size = 0.7
+    elif task_name.startswith('PickPlace_'):
+        ws_size = 1.1
     else:
-        workspace = WORKSPACE
+        ws_size = WS_SIZE
+    workspace = np.array([
+                [table_offset[0] - ws_size/2, table_offset[0] + ws_size/2],
+                [table_offset[1] - ws_size/2, table_offset[1] + ws_size/2],
+                [table_offset[2], table_offset[2] + ws_size]
+            ])
     return workspace
 
-def get_pcd_z_min(task_name):
+def get_pcd_z_min(task_name, table_offset):
     if task_name.startswith('Nut') or task_name.startswith('Square'):
         pcd_z_min = 0.835
+    elif task_name.startswith('Kitchen'):
+        pcd_z_min = table_offset[2] 
     else:
-        pcd_z_min = 0.82
+        pcd_z_min = table_offset[2] + 0.815
     return pcd_z_min
 
 def enlarge_mask(binary_mask, kernel_size, iterations=1):
