@@ -297,8 +297,8 @@ class EnvRobosuite(EB.EnvBase):
 
         
         current_file_path = os.path.dirname(os.path.abspath(__file__))
-        self.SPACEVIEW_RGB_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_image_background.npy"))
-        self.SPACEVIEW_DEPTH_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_depth_background.npy"))
+        #self.SPACEVIEW_RGB_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_image_background.npy"))
+        #self.SPACEVIEW_DEPTH_BACKGROUND = np.load(os.path.join(current_file_path, "spaceview_depth_background.npy"))
 
         if self._is_v1:
             # Make sure joint position observations and eef vel observations are active
