@@ -256,6 +256,8 @@ def o3d2np(pcd_o3d, num_samples=4412):
     rgb = np.asarray(pcd_o3d.colors)
     num_points = xyz.shape[0]
 
+    pcd_np = np.concatenate([xyz, rgb], axis=1)
+
     return pcd_np
 
 def depth2fgpcd(depth, mask, cam_params):
