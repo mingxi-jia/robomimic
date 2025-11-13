@@ -713,6 +713,15 @@ def pcd_to_voxel(pcds: np.ndarray, input_type: str = 'absolute'):
             [-local_size+z_offset, local_size+z_offset]
         ]).T
         voxel_size = BBOX_SIZE_M/LOCAL_VOXEL_RESO
+    elif input_type == 'gripper_se3':
+        local_size = BBOX_SIZE_M / 2
+        x_offset = 0.
+        z_offset = 0.08 # because we dont need to see the entire gripper in the voxel grid
+        bound = np.array([
+            [-local_size+x_offset, local_size+x_offset],
+            [-local_size, local_size],
+            [-local_size+z_offset, local_size+z_offset]
+        ])
     elif input_type == 'relative':
         ws_size = WS_SIZE * 2
         voxel_bound = np.array([

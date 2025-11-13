@@ -552,9 +552,10 @@ class EnvRobosuite(EB.EnvBase):
                 np_pcd = np_pcd[np_pcd[:,2]>pcd_z_min]
                 np_pcd_se3_rel = localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='xyz')[0]
                 ret['pcd'] = crop_pcd(np_pcd, input_type='absolute')
-                ret['pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
-                ret['local_pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='gripper')
-                ret['local_pcd_se3'] = crop_pcd(localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0], input_type='gripper')
+                # ret['pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='relative')
+                # ret['local_pcd_t3'] = crop_pcd(np_pcd_se3_rel, input_type='gripper')
+                # ret['local_pcd_se3'] = crop_pcd(localize_pcd_batch(np_pcd[None,...], eef_pos, local_type='se3')[0], input_type='gripper_se3')
+                # print(1)
 
 
             
