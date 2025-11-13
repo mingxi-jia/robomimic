@@ -256,19 +256,6 @@ def o3d2np(pcd_o3d, num_samples=4412):
     rgb = np.asarray(pcd_o3d.colors)
     num_points = xyz.shape[0]
 
-    mask = (xyz[:, 0] >= WORKSPACE[0, 0]) * (xyz[:, 0] <= WORKSPACE[0, 1]) * (xyz[:, 1] >= WORKSPACE[1, 0]) * (xyz[:, 1] <= WORKSPACE[1, 1]) * (xyz[:, 2] >= WORKSPACE[2, 0]) * (xyz[:, 2] <= WORKSPACE[2, 1])
-    xyz = xyz[mask]
-    rgb = rgb[mask]
-
-    if num_points > num_samples:
-        pcd_o3d = pcd_o3d.farthest_point_down_sample(num_samples=num_samples)
-        xyz = np.asarray(pcd_o3d.points)
-        rgb = np.asarray(pcd_o3d.colors)
-        pcd_np = np.concatenate([xyz, rgb], axis=1)
-    else:
-        pcd_np = np.concatenate([xyz, rgb], axis=1)
-        pcd_np = populate_point_num(pcd_np, num_samples)
-
     return pcd_np
 
 def depth2fgpcd(depth, mask, cam_params):
